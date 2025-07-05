@@ -1,0 +1,7 @@
+./instance*/*
+instance_registry.json
+
+# Instance folders - exclude all instance directories
+instance*/
+ChatBot-Backend-instance*/
+*-instance*/

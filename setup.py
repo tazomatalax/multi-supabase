@@ -16,9 +16,8 @@ def run_command(cmd, cwd=None):
 
 def generate_secrets():
     """Generate secure secrets for Supabase"""
-    # Generate random secrets
-    anon_secret = secrets.token_urlsafe(32)
-    service_secret = secrets.token_urlsafe(32)
+    # Generate JWT secret (must be at least 32 characters)
+    jwt_secret = secrets.token_urlsafe(32)
     
     # Create JWT tokens (using demo format for simplicity)
     anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
@@ -31,6 +30,7 @@ def generate_secrets():
     postgres_password = secrets.token_urlsafe(24)
     
     return {
+        "jwt_secret": jwt_secret,
         "anon_key": anon_key,
         "service_role_key": service_key,
         "dashboard_password": dashboard_password,
@@ -98,31 +98,27 @@ class SupabaseInstanceManager:
     
     def get_instance_info(self, instance_id):
         """Get comprehensive information about an instance"""
-        # Use 10-port increments for each instance
-        port_offset = (instance_id - 1) * 10
-        base_port = 54320 + port_offset
-        postgres_port = 5432 + port_offset
+        # Use single port increments for each instance
+        # Instance 1 should use original ports + 1, Instance 2 should use original ports + 2, etc.
+        port_offset = instance_id
+        kong_http_port = 8000 + port_offset      # 8001, 8002, 8003, etc.
+        postgres_port = 5432 + port_offset       # 5433, 5434, 5435, etc.
         
         return {
             'instance_id': instance_id,
-            'base_port': base_port,
+            'kong_http_port': kong_http_port,
             'postgres_port': postgres_port,
             'database_name': f'postgres_instance{instance_id}',
-            'supabase_url': f'http://localhost:{base_port}',
+            'supabase_url': f'http://localhost:{kong_http_port}',
             'postgres_url': f'postgresql://postgres:POSTGRES_PASSWORD@localhost:{postgres_port}/postgres_instance{instance_id}',
             'docker_network': self.get_docker_network_name(instance_id),
             'ports': {
-                'kong_http': base_port,          # 54320, 54330, 54340, etc.
-                'postgres': postgres_port,       # 5432, 5442, 5452, etc.
-                'kong_https': base_port + 1,     # 54321, 54331, 54341, etc.
-                'studio': base_port + 2,         # 54322, 54332, 54342, etc.
-                'inbucket_web': base_port + 3,   # 54323, 54333, 54343, etc.
-                'inbucket_smtp': base_port + 4,  # 54324, 54334, 54344, etc.
-                'gotrue': base_port + 5,         # 54325, 54335, 54345, etc.
-                'realtime': base_port + 6,       # 54326, 54336, 54346, etc.
-                'storage': base_port + 7,        # 54327, 54337, 54347, etc.
-                'edge_functions': base_port + 8, # 54328, 54338, 54348, etc.
-                'pooler': base_port + 9          # 54329, 54339, 54349, etc.
+                'kong_http': kong_http_port,           # 8001, 8002, 8003, etc.
+                'kong_https': 8443 + port_offset,     # 8444, 8445, 8446, etc.
+                'postgres': postgres_port,             # 5433, 5434, 5435, etc.
+                'studio': 3000 + port_offset,          # 3001, 3002, 3003, etc.
+                'analytics': 4000 + port_offset,       # 4001, 4002, 4003, etc.
+                'pooler': 6543 + port_offset,          # 6544, 6545, 6546, etc.
             }
         }
     
@@ -131,6 +127,15 @@ class SupabaseInstanceManager:
         info = self.get_instance_info(instance_id)
         instance_key = f"instance{instance_id}"
         
+        # Create folder name based on custom name or default
+        if name:
+            # Sanitize the name for folder usage
+            folder_name = name.replace(" ", "-").replace("/", "-").replace("\\", "-")
+            folder_name = "".join(c for c in folder_name if c.isalnum() or c in "-_")
+            folder_name = f"{folder_name}-instance{instance_id}"
+        else:
+            folder_name = instance_key
+        
         self.registry["instances"][instance_key] = {
             **info,
             'name': name or f"Instance {instance_id}",
@@ -138,7 +143,8 @@ class SupabaseInstanceManager:
             'tags': tags or [],
             'created_at': datetime.now().isoformat(),
             'status': 'configured',
-            'path': os.path.join(self.base_folder, instance_key),
+            'path': os.path.join(self.base_folder, folder_name),
+            'folder_name': folder_name,
             'secrets': secrets or {}
         }
         
@@ -176,7 +182,21 @@ class SupabaseInstanceManager:
         instance_path = instance.get("path", "")
         network_name = self.get_docker_network_name(instance_id)
         
-        # Stop containers if running
+        # Run docker compose down to properly stop and remove containers
+        if instance_path and os.path.exists(instance_path):
+            compose_path = os.path.join(instance_path, "supabase", "docker")
+            if os.path.exists(compose_path):
+                try:
+                    print(f"Running docker compose down for instance {instance_id}...")
+                    original_cwd = os.getcwd()
+                    os.chdir(compose_path)
+                    run_command(["docker", "compose", "down", "-v", "--remove-orphans"])
+                    os.chdir(original_cwd)
+                    print(f"✅ Docker compose down completed for instance {instance_id}")
+                except Exception as e:
+                    print(f"Warning: Error running docker compose down: {e}")
+        
+        # Stop containers if running (fallback)
         if self.docker_client:
             try:
                 containers = self.docker_client.containers.list(filters={"network": network_name})
@@ -264,6 +284,7 @@ class SupabaseInstanceManager:
             connection_info = {
                 "name": instance["name"],
                 "instance_id": instance_id,
+                "folder_name": instance.get("folder_name", f"instance{instance_id}"),
                 "database_url": postgres_url,
                 "supabase_url": instance["supabase_url"],
                 "supabase_anon_key": secrets.get("anon_key", ""),
@@ -282,6 +303,7 @@ class SupabaseInstanceManager:
                 connection_info[key] = {
                     "name": instance["name"],
                     "instance_id": instance_id,
+                    "folder_name": instance.get("folder_name", f"instance{instance_id}"),
                     "database_url": postgres_url,
                     "supabase_url": instance["supabase_url"],
                     "docker_network": instance["docker_network"],
@@ -372,6 +394,8 @@ def clone_supabase_repo(target_dir="supabase"):
 
 def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance_id=1):
     env_path = os.path.join(target_dir, "docker", ".env")
+    compose_path = os.path.join(target_dir, "docker", "docker-compose.yml")
+    
     print(f"Customizing {root_env_path} to {env_path} for instance {instance_id}...")
     
     # Read the template file
@@ -403,6 +427,7 @@ def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance
         # Database configuration
         'POSTGRES_DB=postgres': f'POSTGRES_DB={instance_info["database_name"]}',
         'POSTGRES_PORT=5432': f'POSTGRES_PORT={instance_info["postgres_port"]}',
+        'POSTGRES_PASSWORD=your-super-secret-and-long-postgres-password': f'POSTGRES_PASSWORD={secrets["postgres_password"]}',
         
         # External facing ports - Kong is the main API gateway
         'KONG_HTTP_PORT=8000': f'KONG_HTTP_PORT={instance_info["ports"]["kong_http"]}',
@@ -414,8 +439,21 @@ def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance
         # Site URL for redirects
         'SITE_URL=http://localhost:3000': f'SITE_URL={instance_info["supabase_url"]}',
         
+        # Studio port
+        'STUDIO_PORT=3000': f'STUDIO_PORT={instance_info["ports"]["studio"]}',
+        
         # Pooler port
         'POOLER_PROXY_PORT_TRANSACTION=6543': f'POOLER_PROXY_PORT_TRANSACTION={instance_info["ports"]["pooler"]}',
+        
+        # JWT keys
+        'ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE':
+            f'ANON_KEY={secrets["anon_key"]}',
+        
+        'SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q':
+            f'SERVICE_ROLE_KEY={secrets["service_role_key"]}',
+            
+        # JWT secret
+        'JWT_SECRET=your-super-secret-jwt-token-with-at-least-32-characters-long': f'JWT_SECRET={secrets["jwt_secret"]}',
     }
     
     # Apply replacements
@@ -444,6 +482,9 @@ def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance
     with open(env_path, 'w') as f:
         f.write(env_content)
     
+    # Customize docker-compose.yml for unique container names
+    customize_docker_compose(compose_path, instance_id, network_name)
+    
     # Update instance info with generated secrets
     instance_info['secrets'] = secrets
     
@@ -456,10 +497,82 @@ def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance
     
     return instance_info
 
+def customize_docker_compose(compose_path, instance_id, network_name):
+    """Customize docker-compose.yml file to make container names unique per instance"""
+    print(f"Customizing docker-compose.yml for instance {instance_id}...")
+    
+    # Read the docker-compose.yml file
+    with open(compose_path, 'r') as f:
+        compose_content = f.read()
+    
+    # Update the compose project name to be unique per instance
+    compose_content = compose_content.replace(
+        'name: supabase',
+        f'name: supabase-instance{instance_id}'
+    )
+    
+    # Define container name replacements for unique naming
+    container_replacements = {
+        'container_name: supabase-studio': f'container_name: supabase-instance{instance_id}-studio',
+        'container_name: supabase-kong': f'container_name: supabase-instance{instance_id}-kong',
+        'container_name: supabase-auth': f'container_name: supabase-instance{instance_id}-auth',
+        'container_name: supabase-rest': f'container_name: supabase-instance{instance_id}-rest',
+        'container_name: realtime-dev.supabase-realtime': f'container_name: supabase-instance{instance_id}-realtime',
+        'container_name: supabase-storage': f'container_name: supabase-instance{instance_id}-storage',
+        'container_name: supabase-imgproxy': f'container_name: supabase-instance{instance_id}-imgproxy',
+        'container_name: supabase-meta': f'container_name: supabase-instance{instance_id}-meta',
+        'container_name: supabase-edge-functions': f'container_name: supabase-instance{instance_id}-edge-functions',
+        'container_name: supabase-analytics': f'container_name: supabase-instance{instance_id}-analytics',
+        'container_name: supabase-db': f'container_name: supabase-instance{instance_id}-db',
+        'container_name: supabase-vector': f'container_name: supabase-instance{instance_id}-vector',
+        'container_name: supabase-pooler': f'container_name: supabase-instance{instance_id}-pooler',
+    }
+    
+    # Apply container name replacements
+    for old_name, new_name in container_replacements.items():
+        compose_content = compose_content.replace(old_name, new_name)
+    
+    # Update networks section if it exists, otherwise add it
+    if 'networks:' in compose_content:
+        # Find the networks section and add our custom network
+        networks_section = f"""
+networks:
+  default:
+    name: {network_name}
+    external: true
+"""
+        # Replace the existing networks section
+        import re
+        compose_content = re.sub(r'\nnetworks:.*?(?=\n\S|\Z)', networks_section, compose_content, flags=re.DOTALL)
+    else:
+        # Add networks section at the end
+        compose_content += f"""
+networks:
+  default:
+    name: {network_name}
+    external: true
+"""
+    
+    # Write the customized docker-compose.yml
+    with open(compose_path, 'w') as f:
+        f.write(compose_content)
+    
+    print(f"✅ Docker Compose customized for instance {instance_id}")
+
 def setup_instance(manager, instance_id, name=None, description=None, tags=None):
     """Set up a single Supabase instance"""
     base_folder = manager.base_folder
-    instance_dir = os.path.join(base_folder, f"instance{instance_id}")
+    
+    # Create folder name based on custom name or default
+    if name:
+        # Sanitize the name for folder usage
+        folder_name = name.replace(" ", "-").replace("/", "-").replace("\\", "-")
+        folder_name = "".join(c for c in folder_name if c.isalnum() or c in "-_")
+        folder_name = f"{folder_name}-instance{instance_id}"
+    else:
+        folder_name = f"instance{instance_id}"
+    
+    instance_dir = os.path.join(base_folder, folder_name)
     os.makedirs(instance_dir, exist_ok=True)
     
     original_cwd = os.getcwd()
@@ -473,10 +586,17 @@ def setup_instance(manager, instance_id, name=None, description=None, tags=None)
         # Register the instance
         manager.register_instance(instance_id, name=name, description=description, tags=tags, secrets=instance_info.get('secrets'))
         
+        # Get the actual postgres connection string with password
+        secrets = instance_info.get('secrets', {})
+        postgres_password = secrets.get('postgres_password', 'your-postgres-password')
+        postgres_connection_string = f"postgresql://postgres:{postgres_password}@localhost:{instance_info['postgres_port']}/{instance_info['database_name']}"
+        
         print(f"Instance {instance_id} set up at {instance_dir}/supabase")
-        print(f"Network: {instance_info['docker_network']}")
-        print(f"Supabase URL: {instance_info['supabase_url']}")
-        print(f"PostgreSQL Port: {instance_info['postgres_port']}")
+        print(f"📁 Folder: {folder_name}")
+        print(f"🐳 Network: {instance_info['docker_network']}")
+        print(f"🌐 Supabase URL: {instance_info['supabase_url']}")
+        print(f"🔌 PostgreSQL Port: {instance_info['postgres_port']}")
+        print(f"🗄️  PostgreSQL Connection String: {postgres_connection_string}")
         
         return instance_info
     finally:
@@ -544,10 +664,11 @@ def main():
     elif args.command == "list":
         instances = manager.list_instances()
         if args.format == "table":
-            print(f"{'ID':<4} {'Name':<20} {'Status':<12} {'Supabase URL':<30} {'PostgreSQL Port':<6}")
-            print("-" * 80)
+            print(f"{'ID':<4} {'Name':<20} {'Folder':<25} {'Status':<12} {'Supabase URL':<30} {'PostgreSQL Port':<6}")
+            print("-" * 105)
             for instance in instances:
-                print(f"{instance['instance_id']:<4} {instance['name']:<20} {instance['current_status']:<12} {instance['supabase_url']:<30} {instance['postgres_port']:<6}")
+                folder_name = instance.get('folder_name', f"instance{instance['instance_id']}")
+                print(f"{instance['instance_id']:<4} {instance['name']:<20} {folder_name:<25} {instance['current_status']:<12} {instance['supabase_url']:<30} {instance['postgres_port']:<6}")
         elif args.format == "json":
             print(json.dumps(instances, indent=2))
         elif args.format == "yaml":
