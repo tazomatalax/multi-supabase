@@ -1,0 +1,53 @@
+# Sample Instance Configuration
+# This shows how you might organize your instances for different purposes
+
+instances:
+  1:
+    name: "Development ChatBot"
+    description: "Development environment for LLM chatbot testing"
+    tags: ["development", "chatbot", "llm"]
+    purpose: "Development and testing of new chatbot features"
+    
+  2:
+    name: "Staging ChatBot"
+    description: "Staging environment for chatbot deployment testing"
+    tags: ["staging", "chatbot", "llm", "pre-production"]
+    purpose: "Final testing before production deployment"
+    
+  3:
+    name: "Production ChatBot"
+    description: "Production environment for live chatbot"
+    tags: ["production", "chatbot", "llm", "live"]
+    purpose: "Live chatbot serving real users"
+    
+  4:
+    name: "A/B Testing ChatBot"
+    description: "Alternative version for A/B testing"
+    tags: ["testing", "ab-testing", "chatbot", "experimental"]
+    purpose: "Testing different models and configurations"
+    
+  5:
+    name: "Analytics Backend"
+    description: "Backend for analytics and reporting"
+    tags: ["analytics", "reporting", "metrics"]
+    purpose: "Collecting and analyzing chatbot performance data"
+
+# Example setup commands:
+# python3 setup.py setup --instances 1 --name "Development ChatBot" --description "Development environment for LLM chatbot testing" --tags development chatbot llm
+# python3 setup.py setup --instances 2 --name "Staging ChatBot" --description "Staging environment for chatbot deployment testing" --tags staging chatbot llm pre-production
+# python3 setup.py setup --instances 3 --name "Production ChatBot" --description "Production environment for live chatbot" --tags production chatbot llm live
+# python3 setup.py setup --instances 4 --name "A/B Testing ChatBot" --description "Alternative version for A/B testing" --tags testing ab-testing chatbot experimental
+# python3 setup.py setup --instances 5 --name "Analytics Backend" --description "Backend for analytics and reporting" --tags analytics reporting metrics
+
+# Network topology:
+# - Each instance gets its own Docker network
+# - External services can connect via docker-compose
+# - Database connections use unique ports
+# - Supabase API endpoints use unique ports
+
+# Port allocation:
+# Instance 1: Supabase API 54320, PostgreSQL 5432
+# Instance 2: Supabase API 54420, PostgreSQL 5532
+# Instance 3: Supabase API 54520, PostgreSQL 5632
+# Instance 4: Supabase API 54620, PostgreSQL 5732
+# Instance 5: Supabase API 54720, PostgreSQL 5832
