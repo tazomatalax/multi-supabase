@@ -21,7 +21,7 @@ def generate_secrets():
     
     # Create JWT tokens (using demo format for simplicity)
     anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
     
     # Generate other secrets
     dashboard_password = secrets.token_urlsafe(16)
@@ -190,46 +190,67 @@ class SupabaseInstanceManager:
                     print(f"Running docker compose down for instance {instance_id}...")
                     original_cwd = os.getcwd()
                     os.chdir(compose_path)
-                    run_command(["docker", "compose", "down", "-v", "--remove-orphans"])
+                    result = subprocess.run(["docker", "compose", "down", "-v", "--remove-orphans"], capture_output=True, text=True)
                     os.chdir(original_cwd)
+                    if result.returncode != 0:
+                        print(f"Error: docker compose down failed for instance {instance_id}: {result.stderr}")
+                        return False, f"Failed to stop containers for instance {instance_id}. See logs above."
                     print(f"✅ Docker compose down completed for instance {instance_id}")
                 except Exception as e:
                     print(f"Warning: Error running docker compose down: {e}")
-        
+                    return False, f"Error running docker compose down: {e}"
+
         # Stop containers if running (fallback)
         if self.docker_client:
             try:
                 containers = self.docker_client.containers.list(filters={"network": network_name})
                 for container in containers:
                     print(f"Stopping container: {container.name}")
-                    container.stop()
-                    container.remove()
-                
+                    try:
+                        container.stop()
+                        container.remove()
+                    except Exception as ce:
+                        print(f"Warning: Could not stop/remove container {container.name}: {ce}")
                 # Remove Docker network
                 try:
                     networks = self.docker_client.networks.list(names=[network_name])
                     for network in networks:
                         print(f"Removing Docker network: {network_name}")
-                        network.remove()
+                        try:
+                            network.remove()
+                        except Exception as ne:
+                            print(f"Warning: Could not remove Docker network {network_name}: {ne}")
+                    # Verify network removal
+                    networks_left = self.docker_client.networks.list(names=[network_name])
+                    if networks_left:
+                        print(f"Warning: Docker network {network_name} still exists after attempted removal.")
                 except Exception as e:
                     print(f"Warning: Could not remove Docker network {network_name}: {e}")
-                        
             except Exception as e:
                 print(f"Warning: Error stopping containers: {e}")
-        
-        # Remove from registry
-        del self.registry["instances"][instance_key]
-        if network_name in self.registry["networks"]:
+
+        # Remove from registry with validation
+        if instance_key in self.registry["instances"]:
+            del self.registry["instances"][instance_key]
+        if network_name in self.registry.get("networks", {}):
             del self.registry["networks"][network_name]
-        
-        # Remove files if requested
+
+        # Remove files if requested, with safety checks
         if remove_files and instance_path and os.path.exists(instance_path):
-            try:
-                shutil.rmtree(instance_path)
-                print(f"Removed instance files: {instance_path}")
-            except Exception as e:
-                print(f"Warning: Could not remove files {instance_path}: {e}")
-        
+            # Safety: Only allow removal if path is within base_folder and named as instance*
+            base_folder = os.path.abspath(self.base_folder)
+            abs_instance_path = os.path.abspath(instance_path)
+            if abs_instance_path.startswith(base_folder) and os.path.basename(abs_instance_path).startswith("instance"):
+                try:
+                    shutil.rmtree(abs_instance_path)
+                    print(f"Removed instance files: {abs_instance_path}")
+                except Exception as e:
+                    print(f"Warning: Could not remove files {abs_instance_path}: {e}")
+                    return False, f"Could not remove files: {e}"
+            else:
+                print(f"Error: Refusing to delete files outside managed instance directory: {abs_instance_path}")
+                return False, f"Refusing to delete files outside managed instance directory: {abs_instance_path}"
+
         self.save_registry()
         return True, f"Instance {instance_id} deleted successfully"
     

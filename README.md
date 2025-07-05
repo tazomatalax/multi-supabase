@@ -78,37 +78,37 @@ python3 setup.py update 1 --name "Main-ChatBot" --description "Primary chatbot b
 ## Instance Configuration
 
 Each instance gets:
-- **Unique Ports**: Base port + (instance_id - 1) × 100
+- **Unique Ports**: Base port + instance_id
 - **Dedicated Database**: `postgres_instance{id}`
 - **Docker Network**: `supabase-instance{id}-network`
 - **Isolated Environment**: Complete separation between instances
 
 ### Port Mapping
 
-For instance 1 (base port 54320):
-- Supabase API: 54320
-- PostgreSQL: 5432
-- Supabase Studio: 54322
-- Other services: 54321-54328
+For instance 1:
+- Kong HTTP (API Gateway): 8001
+- PostgreSQL: 5433
+- Supabase Studio: 3001
+- Other services: 8002, 8003, ...
 
-For instance 2 (base port 54420):
-- Supabase API: 54420
-- PostgreSQL: 5532
-- Supabase Studio: 54422
-- Other services: 54421-54428
+For instance 2:
+- Kong HTTP (API Gateway): 8002
+- PostgreSQL: 5434
+- Supabase Studio: 3002
+- Other services: 8003, 8004, ...
 
 ## Connection Information
 
 ### Database Connection
 ```
-postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:PORT/postgres_instanceN
+postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:5433/postgres_instance1
 ```
 
 ### Supabase API
 ```
-URL: http://localhost:BASE_PORT
+URL: http://localhost:8001
 Anon Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-Service Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+Service Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
 ```
 
 ## Docker Integration
@@ -133,9 +133,9 @@ services:
   my-llm-chatbot:
     image: my-chatbot:latest
     environment:
-      - DATABASE_URL=postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:5432/postgres_instance1
-      - SUPABASE_URL=http://localhost:54320
-      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      - DATABASE_URL=postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:5433/postgres_instance1
+      - SUPABASE_URL=http://localhost:8001
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
     networks:
       - supabase-instance1-network
     depends_on:
@@ -176,12 +176,13 @@ networks:
 - `list` - List all instances
 - `info [instance_id]` - Show connection info
 - `status [instance_id]` - Check instance status
-- `update <instance_id> <name>` - Update instance name
+- `update <instance_id> <name> [description]` - Update instance name and optional description
 - `template <instance_id> <service_name>` - Generate docker-compose template
 - `start <instance_id>` - Start instance
 - `stop <instance_id>` - Stop instance
 - `logs <instance_id>` - View instance logs
 - `env <instance_id>` - Show environment variables
+- `delete <instance_id> [--files]` - Delete instance and optionally remove files
 
 ### Python Script Commands
 - `setup` - Set up instances with advanced options
