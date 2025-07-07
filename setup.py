@@ -9,6 +9,7 @@ from datetime import datetime
 import secrets
 import base64
 import time
+import jwt  # Add this import
 
 def run_command(cmd, cwd=None):
     print("Running:", " ".join(cmd))
@@ -18,17 +19,41 @@ def generate_secrets():
     """Generate secure secrets for Supabase"""
     # Generate JWT secret (must be at least 32 characters)
     jwt_secret = secrets.token_urlsafe(32)
-    
-    # Create JWT tokens (using demo format for simplicity)
-    anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-    service_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
-    
+
+    # JWT claims
+    now = int(time.time())
+    # Set expiry to 100 years in the future for practical non-expiry
+    exp = now + 60 * 60 * 24 * 365 * 100
+    iss = "supabase-local"
+
+    # Generate anon_key JWT
+    anon_payload = {
+        "role": "anon",
+        "iss": iss,
+        "iat": now,
+        "exp": exp
+    }
+    anon_key = jwt.encode(anon_payload, jwt_secret, algorithm="HS256")
+    if isinstance(anon_key, bytes):
+        anon_key = anon_key.decode("utf-8")
+
+    # Generate service_role_key JWT
+    service_payload = {
+        "role": "service_role",
+        "iss": iss,
+        "iat": now,
+        "exp": exp
+    }
+    service_key = jwt.encode(service_payload, jwt_secret, algorithm="HS256")
+    if isinstance(service_key, bytes):
+        service_key = service_key.decode("utf-8")
+
     # Generate other secrets
     dashboard_password = secrets.token_urlsafe(16)
     secret_key_base = secrets.token_urlsafe(64)
     vault_enc_key = secrets.token_urlsafe(32)
     postgres_password = secrets.token_urlsafe(24)
-    
+
     return {
         "jwt_secret": jwt_secret,
         "anon_key": anon_key,
@@ -467,10 +492,10 @@ def prepare_supabase_env(manager, root_env_path, target_dir="supabase", instance
         'POOLER_PROXY_PORT_TRANSACTION=6543': f'POOLER_PROXY_PORT_TRANSACTION={instance_info["ports"]["pooler"]}',
         
         # JWT keys
-        'ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE':
+        'ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9zZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE':
             f'ANON_KEY={secrets["anon_key"]}',
         
-        'SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q':
+        'SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9zZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q':
             f'SERVICE_ROLE_KEY={secrets["service_role_key"]}',
             
         # JWT secret
@@ -573,6 +598,16 @@ networks:
     name: {network_name}
     external: true
 """
+    
+    # Update analytics service port mapping (e.g., 4001:4000 for instance 1)
+    analytics_port = 4000 + instance_id
+    compose_content = compose_content.replace('4000:4000', f'{analytics_port}:4000')
+
+    # Optionally handle other known hardcoded ports (studio, pooler, etc.)
+    studio_port = 3000 + instance_id
+    compose_content = compose_content.replace('3000:3000', f'{studio_port}:3000')
+    pooler_port = 6543 + instance_id
+    compose_content = compose_content.replace('6543:6543', f'{pooler_port}:6543')
     
     # Write the customized docker-compose.yml
     with open(compose_path, 'w') as f:

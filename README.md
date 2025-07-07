@@ -107,8 +107,8 @@ postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:543
 ### Supabase API
 ```
 URL: http://localhost:8001
-Anon Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-Service Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+Anon Key: [see instance .env or info command]
+Service Key: [see instance .env or info command]
 ```
 
 ## Docker Integration
@@ -135,7 +135,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:5433/postgres_instance1
       - SUPABASE_URL=http://localhost:8001
-      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9zZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      - SUPABASE_ANON_KEY=[see instance .env or info command]
     networks:
       - supabase-instance1-network
     depends_on:

@@ -5,3 +5,4 @@ instance_registry.json
 instance*/
 ChatBot-Backend-instance*/
 *-instance*/
+*.sql
