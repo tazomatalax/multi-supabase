@@ -51,7 +51,7 @@ def generate_secrets():
     # Generate other secrets
     dashboard_password = secrets.token_urlsafe(16)
     secret_key_base = secrets.token_urlsafe(64)
-    vault_enc_key = secrets.token_urlsafe(32)
+    vault_enc_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8")
     postgres_password = secrets.token_urlsafe(24)
 
     return {
