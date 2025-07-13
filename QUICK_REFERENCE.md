@@ -1,176 +1,78 @@
-# Supabase Instance Manager – Quick Reference
+# Supabase Instance Manager – Quick Reference (v3)
 
-A concise guide for common operations, port mappings, and troubleshooting.
+A concise guide for managing multiple, concurrent Supabase instances.
 
 ---
 
-## Installation & Setup
+## Core Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Create and start a new instance named 'project-alpha'
+# Ports will be assigned automatically, starting from 5433, 8001, etc.
+python3 setup.py create project-alpha
 
-# Make shell script executable
-chmod +x supabase-manager.sh
+# Create a second instance, which will get the next set of ports.
+python3 setup.py create project-beta
+
+# List all existing instances and their running status
+python3 setup.py list
+
+# Stop and completely delete an instance and its data
+python3 setup.py destroy project-alpha
 ```
 
 ---
 
-## Common Commands
-
-### Shell Script (Recommended)
+## Instance Lifecycle Management
 
 ```bash
-# Set up default instances (1-5)
-./supabase-manager.sh setup
+# Start a stopped instance
+python3 setup.py start project-alpha
 
-# Set up specific instances
-./supabase-manager.sh setup 1 2 3
+# Stop a running instance
+python3 setup.py stop project-alpha
 
-# List all instances
-./supabase-manager.sh list
+# Follow logs from an instance
+python3 setup.py logs project-alpha -f
 
-# Get info for instance 1
-./supabase-manager.sh info 1
-
-# Start/Stop instance 1
-./supabase-manager.sh start 1
-./supabase-manager.sh stop 1
-
-# View logs
-./supabase-manager.sh logs 1
-
-# Show environment variables
-./supabase-manager.sh env 1
-
-# Delete instance 1 (keep files)
-./supabase-manager.sh delete 1
-
-# Delete instance 1 and remove files
-./supabase-manager.sh delete 1 --files
-```
-
-### Python Script (Advanced)
-
-```bash
-# Set up with custom name/description
-python3 setup.py setup --instances 1 --name "ChatBot-Backend" --description "Backend for main chatbot"
-
-# List instances (table format)
-python3 setup.py list --format table
-
-# Export connection info as env file
-python3 setup.py info --instance 1 --format env --output chatbot.env
-
-# Generate docker-compose template
-python3 setup.py template 1 my-llm-service --output docker-compose.external.yml
-
-# Update instance name/description
-python3 setup.py update 1 --name "Main-ChatBot" --description "Primary chatbot backend"
-
-# Delete instance and files
-python3 setup.py delete 1 --remove-files
+# Check the status of services within an instance
+python3 setup.py ps project-alpha
 ```
 
 ---
 
-## Instance Management
+## Key Concepts
 
-- **Create**: `setup`
-- **List**: `list`
-- **Update**: `update <id> <name> [description]`
-- **Delete**: `delete <id> [--files|--remove-files]`
-
----
-
-## Connection & Info
-
-- **Show info**: `info <id>`
-- **Show env**: `env <id>`
-- **Export info**: `info --instance <id> --format env --output <file>`
-
----
-
-## Docker Operations
-
-- **Start**: `start <id>`
-- **Stop**: `stop <id>`
-- **Logs**: `logs <id>`
-- **Status**: `status <id>`
-
----
-
-## Advanced Usage
-
-- **Generate docker-compose template**:
-  - Shell: `./supabase-manager.sh template 1 my-service > docker-compose.yml`
-  - Python: `python3 setup.py template 1 my-service --output docker-compose.yml`
-
----
-
-## Troubleshooting
-
-- **Docker not running**: Start Docker daemon
-- **Port conflicts**: Check if ports are in use (`lsof -i :PORT`)
-- **Permission errors**: Ensure script has write permissions
-- **Network issues**: `docker network ls | grep supabase`
-- **Logs**: `./supabase-manager.sh logs <id>`
+-   **No Port Conflicts**: The script starts allocating ports from a higher, non-standard range (`5433`, `8001`, etc.) to avoid conflicts with default services on your machine.
+-   **Concurrent Instances**: You can run multiple instances at the same time. The script handles all port assignments to prevent conflicts.
+-   **Direct DB Access**: The PostgreSQL port is always exposed to `localhost`. The connection string is provided when you create the instance.
+-   **Instance Registry**: A file at `instances/instances.json` keeps track of your instances, their IDs, and their assigned ports.
 
 ---
 
 ## Port Reference Table
 
-| Instance | Kong HTTP | PostgreSQL | Studio |
-|----------|-----------|------------|--------|
-| 1        | 8001      | 5433       | 3001   |
-| 2        | 8002      | 5434       | 3002   |
-| 3        | 8003      | 5435       | 3003   |
-| ...      | ...       | ...        | ...    |
+Ports are assigned based on instance ID. The first instance gets ID 1, the second gets ID 2, and so on.
+
+| Instance ID | Kong HTTP Port | PostgreSQL Port | Studio Port |
+|-------------|----------------|-----------------|-------------|
+| 1           | 8001           | 5433            | 3001        |
+| 2           | 8002           | 5434            | 3002        |
+| 3           | 8003           | 5435            | 3003        |
+| ...         | ...            | ...             | ...         |
 
 ---
 
-## Use Case Examples
+## Accessing an Instance
 
-### LLM Chatbot Development
+When you create an instance, its unique connection details are printed. You can also find them in the output of `python3 setup.py list`.
 
-- **Dev**: `./supabase-manager.sh setup 1`
-- **Staging**: `./supabase-manager.sh setup 2`
-- **Prod**: `./supabase-manager.sh setup 3`
+**Example for Instance ID 1 (`project-alpha`):**
 
-### Multi-tenant
-
-- `./supabase-manager.sh setup 1 2 3 4 5`
-- Each instance = separate tenant
-
-### Microservices
-
-- `./supabase-manager.sh setup 1 2 3`
-- Each service gets its own instance/network
+-   **Supabase Studio**: `http://localhost:3001`
+-   **Postgres**: `postgresql://postgres:<password>@localhost:5433/postgres`
+-   **API URL**: `http://localhost:8001`
 
 ---
 
-## Example docker-compose Service
-
-```yaml
-version: '3.8'
-services:
-  my-llm-chatbot:
-    image: my-chatbot:latest
-    environment:
-      - DATABASE_URL=postgresql://postgres:your-super-secret-and-long-postgres-password@localhost:5433/postgres_instance1
-      - SUPABASE_URL=http://localhost:8001
-      - SUPABASE_ANON_KEY=[see instance .env or info command]
-    networks:
-      - supabase-instance1-network
-    depends_on:
-      - supabase-db
-
-networks:
-  supabase-instance1-network:
-    external: true
-    name: supabase-instance1-network
-```
-
----
-
-For more details, see the full README.md.
+For more details, see the full `README.md`.
