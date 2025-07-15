@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Supabase Instance Manager (Refactored v5)
+Supabase Instance Manager (Refactored v6)
 
-Manages isolated Supabase instances, disabling Supavisor and Analytics services
-to ensure stability and direct database access.
+Manages isolated Supabase instances by dynamically configuring .env files for port
+allocation, leaving the original docker-compose.yml unmodified as intended.
 
 Author: vanderwt (Refactored by Gemini)
 License: MIT
@@ -22,9 +22,8 @@ from typing import List, Dict, Optional
 
 try:
     import jwt
-    import yaml
 except ImportError:
-    print("Required packages are not installed. Please run: pip install pyjwt pyyaml")
+    print("PyJWT is not installed. Please run: pip install pyjwt")
     exit(1)
 
 # --- Configuration ---
@@ -59,37 +58,32 @@ def run_command(cmd: List[str], cwd: str, check: bool = True, capture: bool = Fa
         raise
 
 def load_registry() -> Dict[str, Dict]:
-    """Loads the instance registry from a JSON file."""
     if not REGISTRY_FILE.exists():
         return {}
     with open(REGISTRY_FILE, 'r') as f:
         try:
             return json.load(f)
         except json.JSONDecodeError:
-            logger.warning("Registry file is corrupted, starting fresh.")
             return {}
 
 def save_registry(registry: Dict[str, Dict]) -> None:
-    """Saves the instance registry to a JSON file."""
     INSTANCES_ROOT_DIR.mkdir(exist_ok=True)
     with open(REGISTRY_FILE, 'w') as f:
         json.dump(registry, f, indent=2)
 
 def get_next_instance_id(registry: Dict[str, Dict]) -> int:
-    """Finds the next available integer ID for a new instance."""
     if not registry:
         return 1
     existing_ids = [data['id'] for data in registry.values()]
     return max(existing_ids) + 1 if existing_ids else 1
 
 def generate_secrets() -> Dict[str, str]:
-    """Generate all necessary secrets for a Supabase instance."""
     logger.info("Generating secure secrets...")
-    jwt_secret = ''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(40))
+    jwt_secret = secrets.token_hex(32)  # Simpler and stronger
 
     def create_jwt(role: str) -> str:
         now = int(time.time())
-        exp = now + (10 * 365 * 24 * 60 * 60)
+        exp = now + (5 * 365 * 24 * 60 * 60)
         payload = {"role": role, "iss": "supabase", "iat": now, "exp": exp}
         return jwt.encode(payload, jwt_secret, algorithm="HS256")
 
@@ -103,24 +97,54 @@ def generate_secrets() -> Dict[str, str]:
     }
 
 def clone_supabase_template() -> None:
-    """Clones or updates the Supabase repository to be used as a template."""
     if SUPABASE_TEMPLATE_DIR.exists():
         logger.info("Updating Supabase template from git...")
         run_command(["git", "pull"], cwd=str(SUPABASE_TEMPLATE_DIR))
     else:
         logger.info("Cloning Supabase repository for template...")
-        run_command([
-            "git", "clone", "--depth", "1",
-            "https://github.com/supabase/supabase",
-            str(SUPABASE_TEMPLATE_DIR)
-        ], cwd=str(BASE_DIR))
+        run_command(
+            [
+                "git", "clone", "--depth", "1",
+                "https://github.com/supabase/supabase",
+                str(SUPABASE_TEMPLATE_DIR)
+            ], cwd=str(BASE_DIR))
+
+def remove_container_names_from_compose(compose_path: Path) -> None:
+    """Remove all 'container_name:' lines from the docker-compose.yml file."""
+    if not compose_path.exists():
+        logger.warning(f"{compose_path} does not exist.")
+        return
+    with open(compose_path, "r") as f:
+        lines = f.readlines()
+    with open(compose_path, "w") as f:
+        for line in lines:
+            if not line.strip().startswith("container_name:"):
+                f.write(line)
+
+# --- Port allocation improvement ---
+def get_next_available_ports(registry: Dict[str, Dict]) -> Dict[str, int]:
+    base_ports = {
+        "kong_http": 8001,
+        "postgres_direct": 5433,
+        "supavisor_pooler": 6544,
+        "studio": 3001,
+    }
+    used_kong_ports = {data['ports']['kong_http'] for data in registry.values()}
+    offset = 0
+    while True:
+        candidate_port = base_ports["kong_http"] + offset
+        if candidate_port not in used_kong_ports:
+            return {
+                "kong_http": base_ports["kong_http"] + offset,
+                "postgres_direct": base_ports["postgres_direct"] + offset,
+                "supavisor_pooler": base_ports["supavisor_pooler"] + offset,
+                "studio": base_ports["studio"] + offset,
+            }
+        offset += 1
 
 # --- Main Functions ---
 
 def create_instance(name: str) -> None:
-    """
-    Creates and starts a new, isolated Supabase instance with dynamic port allocation.
-    """
     registry = load_registry()
     if name in registry:
         logger.error(f"Instance '{name}' already exists.")
@@ -137,70 +161,42 @@ def create_instance(name: str) -> None:
     shutil.copytree(template_docker_path, instance_path, dirs_exist_ok=True)
     logger.info(f"Copied template to {instance_path}")
 
-    port_offset = instance_id - 1
-    ports = {
-        "kong_http": 8001 + port_offset,
-        "kong_https": 8444 + port_offset,
-        "postgres": 5433 + port_offset,
-        "studio": 3001 + port_offset,
-    }
-    secrets = generate_secrets()
+    # Remove container_name lines from docker-compose.yml
+    compose_file_path = instance_path / "docker-compose.yml"
+    remove_container_names_from_compose(compose_file_path)
+
+    # Use robust port allocation
+    ports = get_next_available_ports(registry)
+    secrets_dict = generate_secrets()
 
     env_example_path = instance_path / ".env.example"
     env_path = instance_path / ".env"
-    with open(env_example_path, 'r') as f:
-        env_content = f.read()
 
-    replacements = {
-        "POSTGRES_PASSWORD=your-super-secret-and-long-postgres-password": f"POSTGRES_PASSWORD={secrets['POSTGRES_PASSWORD']}",
-        "JWT_SECRET=your-super-secret-jwt-token-with-at-least-32-characters-long": f"JWT_SECRET={secrets['JWT_SECRET']}",
-        "ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9zZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE": f"ANON_KEY={secrets['ANON_KEY']}",
-        "SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9zZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q": f"SERVICE_ROLE_KEY={secrets['SERVICE_ROLE_KEY']}",
-        "DASHBOARD_USERNAME=supabase": f"DASHBOARD_USERNAME={secrets['DASHBOARD_USERNAME']}",
-        "DASHBOARD_PASSWORD=this_password_is_insecure_and_should_be_updated": f"DASHBOARD_PASSWORD={secrets['DASHBOARD_PASSWORD']}",
-        "KONG_HTTP_PORT=8000": f"KONG_HTTP_PORT={ports['kong_http']}",
-        "POSTGRES_PORT=5432": f"POSTGRES_PORT={ports['postgres']}",
-        "STUDIO_PORT=3000": f"STUDIO_PORT={ports['studio']}",
+    # --- Robust .env creation ---
+    instance_values = {
+        "POSTGRES_PASSWORD": secrets_dict['POSTGRES_PASSWORD'],
+        "JWT_SECRET": secrets_dict['JWT_SECRET'],
+        "ANON_KEY": secrets_dict['ANON_KEY'],
+        "SERVICE_ROLE_KEY": secrets_dict['SERVICE_ROLE_KEY'],
+        "DASHBOARD_USERNAME": secrets_dict['DASHBOARD_USERNAME'],
+        "DASHBOARD_PASSWORD": secrets_dict['DASHBOARD_PASSWORD'],
+        "KONG_HTTP_PORT": str(ports['kong_http']),
+        "POSTGRES_PORT": str(ports['postgres_direct']),
+        "POOLER_PROXY_PORT_TRANSACTION": str(ports['supavisor_pooler']),
+        "STUDIO_PORT": str(ports['studio']),
     }
-    for old, new in replacements.items():
-        env_content = env_content.replace(old, new)
-
-    with open(env_path, 'w') as f:
-        f.write(env_content)
-    logger.info("Successfully created and secured .env file.")
-
-    compose_path = instance_path / "docker-compose.yml"
-    with open(compose_path, 'r') as f:
-        lines = f.readlines()
-
-    with open(compose_path, 'w') as f:
-        in_service_to_comment = False
-        service_name = ""
-        for line in lines:
-            stripped_line = line.strip()
-            if stripped_line in ["supavisor:", "analytics:"]:
-                in_service_to_comment = True
-                service_name = stripped_line[:-1]
-            elif not line.startswith(" "):
-                in_service_to_comment = False
-
-            if in_service_to_comment:
-                f.write(f"# {line}")
+    with open(env_example_path, 'r') as f_template, open(env_path, 'w') as f_final:
+        for line in f_template:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                f_final.write(line)
+                continue
+            key = stripped.split('=', 1)[0]
+            if key in instance_values:
+                f_final.write(f"{key}={instance_values[key]}\n")
             else:
-                f.write(line)
-    logger.info("Commented out Supavisor and Analytics services in docker-compose.yml")
-
-    with open(compose_path, 'r') as f:
-        compose_data = yaml.safe_load(f)
-
-    if 'db' in compose_data['services']:
-        compose_data['services']['db']['ports'] = [
-            f"${{POSTGRES_PORT}}:${{POSTGRES_PORT}}"
-        ]
-        logger.info("Exposed PostgreSQL port for direct access.")
-
-    with open(compose_path, 'w') as f:
-        yaml.dump(compose_data, f, sort_keys=False)
+                f_final.write(line)
+    logger.info("Successfully created and secured .env file with dynamic ports.")
 
     logger.info(f"Pulling Docker images for project '{project_name}'...")
     run_command(["docker", "compose", "--project-name", project_name, "pull"], cwd=str(instance_path))
@@ -215,8 +211,8 @@ def create_instance(name: str) -> None:
     logger.info(f"Project Name: {project_name}")
     logger.info(f"Studio URL: http://localhost:{ports['studio']}")
     logger.info(f"API URL: http://localhost:{ports['kong_http']}")
-    logger.info(f"Postgres Port: {ports['postgres']}")
-    logger.info(f"Postgres Connection: postgresql://postgres:{secrets['POSTGRES_PASSWORD']}@localhost:{ports['postgres']}/postgres")
+    logger.info(f"DB (Direct Session): postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['postgres_direct']}/postgres")
+    logger.info(f"DB (Pooled Transaction): postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['supavisor_pooler']}/postgres")
 
 def destroy_instance(name: str) -> None:
     registry = load_registry()
@@ -229,9 +225,10 @@ def destroy_instance(name: str) -> None:
 
     logger.warning(f"Destroying instance '{name}'. This will delete all its data.")
     try:
-        run_command([
-            "docker", "compose", "--project-name", project_name, "down", "--volumes", "--remove-orphans"
-        ], cwd=str(instance_path))
+        run_command(
+            [
+                "docker", "compose", "--project-name", project_name, "down", "--volumes", "--remove-orphans"
+            ], cwd=str(instance_path))
     except subprocess.CalledProcessError:
         logger.error("Failed to run 'docker compose down'. The instance may not have been running.")
 
@@ -246,7 +243,7 @@ def list_instances() -> None:
         logger.info("No instances found.")
         return
 
-    print(f"{'INSTANCE':<20} {'ID':<5} {'STATUS':<20} {'API PORT':<10} {'DB PORT'}")
+    print(f"{'INSTANCE':<20} {'ID':<5} {'STATUS':<20} {'API':<8} {'DB':<8} {'POOLER'}")
     print("-" * 80)
 
     for name, data in sorted(registry.items(), key=lambda item: item[1]['id']):
@@ -255,7 +252,9 @@ def list_instances() -> None:
         status = "Not Running"
         try:
             output = run_command(
-                ["docker", "compose", "--project-name", project_name, "ps", "--format", "json"],
+                [
+                    "docker", "compose", "--project-name", project_name, "ps", "--format", "json"
+                ],
                 cwd=str(instance_path), capture=True, check=False
             )
             if output:
@@ -265,13 +264,13 @@ def list_instances() -> None:
         except (subprocess.CalledProcessError, json.JSONDecodeError):
             pass
 
-        print(f"{name:<20} {data['id']:<5} {status:<20} {data['ports']['kong_http']:<10} {data['ports']['postgres']}")
+        print(f"{name:<20} {data['id']:<5} {status:<20} {data['ports']['kong_http']:<8} {data['ports']['postgres_direct']:<8} {data['ports']['supavisor_pooler']}")
 
 def main():
     INSTANCES_ROOT_DIR.mkdir(exist_ok=True)
 
     parser = argparse.ArgumentParser(
-        description="Manage multiple, concurrent Supabase instances with dynamic port allocation.",
+        description="Manage multiple, concurrent Supabase instances.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
