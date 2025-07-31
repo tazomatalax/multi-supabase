@@ -1,78 +1,80 @@
-# Supabase Instance Manager – Quick Reference (v3)
+# Supabase Instance Manager – Quick Reference
 
-A concise guide for managing multiple, concurrent Supabase instances.
+Simple commands for managing multiple, concurrent Supabase instances using Make.
 
----
+## Setup
+
+```bash
+# Install dependencies
+make deps
+
+# Get help
+make help
+```
 
 ## Core Commands
 
 ```bash
-# Create and start a new instance named 'project-alpha'
-# Ports will be assigned automatically, starting from 5433, 8001, etc.
-python3 setup.py create project-alpha
+# Create new instance
+make create NAME=myproject
 
-# Create a second instance, which will get the next set of ports.
-python3 setup.py create project-beta
+# List all instances  
+make list
 
-# List all existing instances and their running status
-python3 setup.py list
-
-# Stop and completely delete an instance and its data
-python3 setup.py destroy project-alpha
+# Destroy instance (with confirmation)
+make destroy NAME=myproject
 ```
 
----
-
-## Instance Lifecycle Management
+## Instance Management
 
 ```bash
-# Start a stopped instance
-python3 setup.py start project-alpha
+# Start/stop any instance
+make myproject-start
+make myproject-stop
+make myproject-restart
 
-# Stop a running instance
-python3 setup.py stop project-alpha
+# View logs (follows by default)
+make myproject-logs
 
-# Follow logs from an instance
-python3 setup.py logs project-alpha -f
-
-# Check the status of services within an instance
-python3 setup.py ps project-alpha
+# Check status
+make myproject-ps
 ```
 
----
+## Common Shortcuts
 
-## Key Concepts
+```bash
+# Quick dev instance commands
+make dev-start
+make dev-stop  
+make dev-logs
 
--   **No Port Conflicts**: The script starts allocating ports from a higher, non-standard range (`5433`, `8001`, etc.) to avoid conflicts with default services on your machine.
--   **Concurrent Instances**: You can run multiple instances at the same time. The script handles all port assignments to prevent conflicts.
--   **Direct DB Access**: The PostgreSQL port is always exposed to `localhost`. The connection string is provided when you create the instance.
--   **Instance Registry**: A file at `instances/instances.json` keeps track of your instances, their IDs, and their assigned ports.
+# Nuclear option - destroy everything
+make clean
+```
 
----
+## What You Get
 
-## Port Reference Table
+Each instance gets:
+- **Unique ports** (no conflicts)
+- **Isolated data** (separate Docker volumes)
+- **Secure secrets** (generated JWT keys)
+- **Easy access** (Studio, API, direct DB)
 
-Ports are assigned based on instance ID. The first instance gets ID 1, the second gets ID 2, and so on.
+## Port Assignment
 
-| Instance ID | Kong HTTP Port | PostgreSQL Port | Studio Port |
-|-------------|----------------|-----------------|-------------|
-| 1           | 8001           | 5433            | 3001        |
-| 2           | 8002           | 5434            | 3002        |
-| 3           | 8003           | 5435            | 3003        |
-| ...         | ...            | ...             | ...         |
+Ports auto-increment by instance ID:
 
----
+| Instance | Studio | API  | Database |
+|----------|--------|------|----------|
+| 1st      | 3001   | 8001 | 5433     |
+| 2nd      | 3002   | 8002 | 5434     |
+| 3rd      | 3003   | 8003 | 5435     |
 
-## Accessing an Instance
+## Direct Python Usage
 
-When you create an instance, its unique connection details are printed. You can also find them in the output of `python3 setup.py list`.
-
-**Example for Instance ID 1 (`project-alpha`):**
-
--   **Supabase Studio**: `http://localhost:3001`
--   **Postgres**: `postgresql://postgres:<password>@localhost:5433/postgres`
--   **API URL**: `http://localhost:8001`
-
----
-
-For more details, see the full `README.md`.
+Still works if you prefer:
+```bash
+python3 setup.py create myproject
+python3 setup.py list
+python3 setup.py destroy myproject
+```

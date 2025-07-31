@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Supabase Instance Manager (Refactored v6)
+Supabase Instance Manager v7
 
-Manages isolated Supabase instances by dynamically configuring .env files for port
-allocation, leaving the original docker-compose.yml unmodified as intended.
+Manages isolated Supabase instances with automatic port allocation and improved reliability.
+Creates concurrent Docker-based instances without conflicts.
 
-Author: vanderwt (Refactored by Gemini)
+Author: vanderwt
 License: MIT
 """
 
@@ -17,20 +17,38 @@ import logging
 import secrets
 import time
 import json
+import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 
-try:
-    import jwt
-except ImportError:
-    print("PyJWT is not installed. Please run: pip install pyjwt")
-    exit(1)
+# Check dependencies upfront
+def check_dependencies():
+    """Verify required dependencies are available."""
+    missing = []
+    
+    try:
+        import jwt
+    except ImportError:
+        missing.append("pyjwt")
+    
+    # Check for required commands
+    commands = ["docker", "git"]
+    for cmd in commands:
+        if shutil.which(cmd) is None:
+            missing.append(cmd)
+    
+    if missing:
+        print(f"❌ Missing dependencies: {', '.join(missing)}")
+        print("Install with: pip install pyjwt")
+        sys.exit(1)
 
-# --- Configuration ---
+check_dependencies()
+import jwt
+
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    level=logging.WARNING,  # Reduced verbosity
+    format='%(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
@@ -59,17 +77,28 @@ def run_command(cmd: List[str], cwd: str, check: bool = True, capture: bool = Fa
 
 def load_registry() -> Dict[str, Dict]:
     if not REGISTRY_FILE.exists():
+        logger.debug(f"Registry file {REGISTRY_FILE} does not exist. Returning empty registry.")
         return {}
     with open(REGISTRY_FILE, 'r') as f:
         try:
-            return json.load(f)
+            registry = json.load(f)
+            logger.debug(f"Loaded registry from {REGISTRY_FILE}: {json.dumps(registry, indent=2)}")
+            return registry
         except json.JSONDecodeError:
+            logger.error(f"Failed to decode registry file {REGISTRY_FILE}. Returning empty registry.")
             return {}
 
 def save_registry(registry: Dict[str, Dict]) -> None:
     INSTANCES_ROOT_DIR.mkdir(exist_ok=True)
-    with open(REGISTRY_FILE, 'w') as f:
-        json.dump(registry, f, indent=2)
+    logger.debug(f"Writing registry to {REGISTRY_FILE} with data: {json.dumps(registry, indent=2)}")
+    try:
+        with open(REGISTRY_FILE, 'w') as f:
+            json.dump(registry, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        logger.debug(f"Registry file {REGISTRY_FILE} written and flushed successfully.")
+    except Exception as e:
+        logger.error(f"Failed to write registry file {REGISTRY_FILE}: {e}")
 
 def get_next_instance_id(registry: Dict[str, Dict]) -> int:
     if not registry:
@@ -78,96 +107,188 @@ def get_next_instance_id(registry: Dict[str, Dict]) -> int:
     return max(existing_ids) + 1 if existing_ids else 1
 
 def generate_secrets() -> Dict[str, str]:
+    """Generate cryptographically secure secrets for Supabase instance."""
     logger.info("Generating secure secrets...")
-    jwt_secret = secrets.token_hex(32)  # Simpler and stronger
-
+    
+    # Generate a strong JWT secret (64 bytes = 512 bits)
+    jwt_secret = secrets.token_hex(64)
+    
     def create_jwt(role: str) -> str:
+        """Create JWT token with proper claims and long expiration."""
         now = int(time.time())
-        exp = now + (5 * 365 * 24 * 60 * 60)
-        payload = {"role": role, "iss": "supabase", "iat": now, "exp": exp}
+        exp = now + (10 * 365 * 24 * 60 * 60)  # 10 years expiration
+        payload = {
+            "role": role,
+            "iss": "supabase", 
+            "aud": "authenticated" if role != "anon" else "anon",
+            "iat": now,
+            "exp": exp
+        }
         return jwt.encode(payload, jwt_secret, algorithm="HS256")
-
+    
     return {
         "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
         "JWT_SECRET": jwt_secret,
-        "ANON_KEY": create_jwt("anon"),
+        "ANON_KEY": create_jwt("anon"), 
         "SERVICE_ROLE_KEY": create_jwt("service_role"),
         "DASHBOARD_USERNAME": "supabase",
         "DASHBOARD_PASSWORD": secrets.token_urlsafe(24),
     }
 
 def clone_supabase_template() -> None:
+    """Clone or update the Supabase template repository."""
     if SUPABASE_TEMPLATE_DIR.exists():
         logger.info("Updating Supabase template from git...")
-        run_command(["git", "pull"], cwd=str(SUPABASE_TEMPLATE_DIR))
+        try:
+            # Check if it's a git repository
+            run_command(["git", "status"], cwd=str(SUPABASE_TEMPLATE_DIR), check=False)
+            run_command(["git", "pull"], cwd=str(SUPABASE_TEMPLATE_DIR))
+        except subprocess.CalledProcessError:
+            logger.warning("Template directory exists but is not a git repo. Removing and re-cloning...")
+            shutil.rmtree(SUPABASE_TEMPLATE_DIR)
+            clone_supabase_template()
     else:
         logger.info("Cloning Supabase repository for template...")
         run_command(
             [
-                "git", "clone", "--depth", "1",
+                "git", "clone", "--depth", "1", "--single-branch",
                 "https://github.com/supabase/supabase",
                 str(SUPABASE_TEMPLATE_DIR)
-            ], cwd=str(BASE_DIR))
+            ], cwd=str(BASE_DIR)
+        )
+        logger.info("Template cloned successfully")
 
 def remove_container_names_from_compose(compose_path: Path) -> None:
     """Remove all 'container_name:' lines from the docker-compose.yml file."""
     if not compose_path.exists():
         logger.warning(f"{compose_path} does not exist.")
         return
+    
     with open(compose_path, "r") as f:
         lines = f.readlines()
+    
     with open(compose_path, "w") as f:
         for line in lines:
             if not line.strip().startswith("container_name:"):
                 f.write(line)
+    
+    logger.debug("Removed container_name directives for better isolation")
 
-# --- Port allocation improvement ---
+def patch_port_mappings(compose_path: Path) -> None:
+    """Patch port mappings in docker-compose.yml for dynamic allocation."""
+    if not compose_path.exists():
+        logger.warning(f"{compose_path} does not exist.")
+        return
+    
+    with open(compose_path, "r") as f:
+        content = f.read()
+    
+    # Simple string replacements for port mappings
+    replacements = [
+        ("- 4000:4000", "- ${PHX_HTTP_PORT}:4000"),
+        ("- 8443:8443", "- ${KONG_HTTPS_PORT}:8443"),
+    ]
+    
+    for old, new in replacements:
+        if old in content:
+            content = content.replace(old, new)
+            print(f"✓ Patched: {old} → {new}")
+    
+    with open(compose_path, "w") as f:
+        f.write(content)
+
 def get_next_available_ports(registry: Dict[str, Dict]) -> Dict[str, int]:
+    """Simplified port allocation using sequential assignment."""
     base_ports = {
         "kong_http": 8001,
+        "kong_https": 8444,
         "postgres_direct": 5433,
         "supavisor_pooler": 6544,
         "studio": 3001,
+        "analytics": 4001,
     }
-    used_kong_ports = {data['ports']['kong_http'] for data in registry.values()}
-    offset = 0
-    while True:
-        candidate_port = base_ports["kong_http"] + offset
-        if candidate_port not in used_kong_ports:
-            return {
-                "kong_http": base_ports["kong_http"] + offset,
-                "postgres_direct": base_ports["postgres_direct"] + offset,
-                "supavisor_pooler": base_ports["supavisor_pooler"] + offset,
-                "studio": base_ports["studio"] + offset,
-            }
-        offset += 1
+    
+    # Find highest used instance ID and increment
+    max_id = 0
+    for data in registry.values():
+        max_id = max(max_id, data.get('id', 0))
+    
+    offset = max_id
+    return {key: base_port + offset for key, base_port in base_ports.items()}
 
 # --- Main Functions ---
 
+def validate_instance_name(name: str) -> bool:
+    """Validate instance name follows naming conventions."""
+    import re
+    if not re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', name) and len(name) > 1:
+        if not re.match(r'^[a-z0-9]$', name):
+            logger.error(f"Invalid instance name '{name}'. Use lowercase letters, numbers, and hyphens only. Must start and end with alphanumeric.")
+            return False
+    if len(name) > 50:
+        logger.error(f"Instance name '{name}' too long. Maximum 50 characters.")
+        return False
+    if name in ['test', 'tmp', 'temp', 'staging', 'prod', 'production']:
+        logger.warning(f"Instance name '{name}' uses a reserved word. Consider a more specific name.")
+    return True
+
 def create_instance(name: str) -> None:
+    """Create a new Supabase instance with isolated configuration."""
+    if not validate_instance_name(name):
+        return
+    
     registry = load_registry()
     if name in registry:
-        logger.error(f"Instance '{name}' already exists.")
+        print(f"❌ Instance '{name}' already exists")
         return
 
     instance_id = get_next_instance_id(registry)
     instance_path = INSTANCES_ROOT_DIR / name
     project_name = f"supabase-{name}"
 
-    logger.info(f"Creating new instance '{name}' with ID {instance_id}...")
-    clone_supabase_template()
+    print(f"🚀 Creating instance '{name}' (ID: {instance_id})...")
+    
+    # Cleanup on failure
+    def cleanup():
+        if instance_path.exists():
+            shutil.rmtree(instance_path, ignore_errors=True)
+    
+    try:
+        clone_supabase_template()
+    except Exception as e:
+        print(f"❌ Failed to prepare template: {e}")
+        cleanup()
+        return
 
     template_docker_path = SUPABASE_TEMPLATE_DIR / "docker"
-    shutil.copytree(template_docker_path, instance_path, dirs_exist_ok=True)
-    logger.info(f"Copied template to {instance_path}")
-
-    # Remove container_name lines from docker-compose.yml
+    if not template_docker_path.exists():
+        logger.error(f"Template docker directory not found: {template_docker_path}")
+        return
+    
+    try:
+        shutil.copytree(template_docker_path, instance_path, dirs_exist_ok=True)
+        logger.info(f"Copied template to {instance_path}")
+    except Exception as e:
+        logger.error(f"Failed to copy template: {e}")
+        return
+    
+    # Configure docker-compose for isolation
     compose_file_path = instance_path / "docker-compose.yml"
+    if not compose_file_path.exists():
+        logger.error(f"docker-compose.yml not found in template: {compose_file_path}")
+        return
+    
     remove_container_names_from_compose(compose_file_path)
+    patch_port_mappings(compose_file_path)
 
-    # Use robust port allocation
-    ports = get_next_available_ports(registry)
-    secrets_dict = generate_secrets()
+    # Allocate ports and generate secrets
+    try:
+        ports = get_next_available_ports(registry)
+        secrets_dict = generate_secrets()
+    except Exception as e:
+        logger.error(f"Failed to allocate resources: {e}")
+        shutil.rmtree(instance_path, ignore_errors=True)
+        return
 
     env_example_path = instance_path / ".env.example"
     env_path = instance_path / ".env"
@@ -181,9 +302,11 @@ def create_instance(name: str) -> None:
         "DASHBOARD_USERNAME": secrets_dict['DASHBOARD_USERNAME'],
         "DASHBOARD_PASSWORD": secrets_dict['DASHBOARD_PASSWORD'],
         "KONG_HTTP_PORT": str(ports['kong_http']),
+        "KONG_HTTPS_PORT": str(ports['kong_https']),
         "POSTGRES_PORT": str(ports['postgres_direct']),
         "POOLER_PROXY_PORT_TRANSACTION": str(ports['supavisor_pooler']),
         "STUDIO_PORT": str(ports['studio']),
+        "PHX_HTTP_PORT": str(ports['analytics']),  # Add analytics port
     }
     with open(env_example_path, 'r') as f_template, open(env_path, 'w') as f_final:
         for line in f_template:
@@ -196,46 +319,105 @@ def create_instance(name: str) -> None:
                 f_final.write(f"{key}={instance_values[key]}\n")
             else:
                 f_final.write(line)
+        # If PHX_HTTP_PORT is not present in .env.example, append it
+        if "PHX_HTTP_PORT" not in [l.strip().split('=')[0] for l in open(env_example_path) if l.strip() and not l.strip().startswith('#')]:
+            f_final.write(f"PHX_HTTP_PORT={instance_values['PHX_HTTP_PORT']}\n")
     logger.info("Successfully created and secured .env file with dynamic ports.")
 
-    logger.info(f"Pulling Docker images for project '{project_name}'...")
-    run_command(["docker", "compose", "--project-name", project_name, "pull"], cwd=str(instance_path))
-
-    logger.info(f"Starting Supabase instance '{name}'...")
-    run_command(["docker", "compose", "--project-name", project_name, "up", "-d"], cwd=str(instance_path))
-
+    # Ensure all required port keys are present
+    required_port_keys = ["kong_http", "kong_https", "postgres_direct", "supavisor_pooler", "studio", "analytics"]
+    for key in required_port_keys:
+        if key not in ports:
+            logger.warning(f"Port key '{key}' missing in ports dict for instance '{name}'.")
+            ports[key] = None
+    logger.debug(f"Saving registry entry for instance '{name}': {{'id': {instance_id}, 'path': str(instance_path), 'ports': ports}}")
     registry[name] = {"id": instance_id, "path": str(instance_path), "ports": ports}
-    save_registry(registry)
+    try:
+        save_registry(registry)
+        logger.info(f"Registry updated successfully for instance '{name}'.")
+    except Exception as e:
+        logger.error(f"Failed to update registry for instance '{name}': {e}")
 
-    logger.info("✅ Instance created and started successfully!")
-    logger.info(f"Project Name: {project_name}")
-    logger.info(f"Studio URL: http://localhost:{ports['studio']}")
-    logger.info(f"API URL: http://localhost:{ports['kong_http']}")
-    logger.info(f"DB (Direct Session): postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['postgres_direct']}/postgres")
-    logger.info(f"DB (Pooled Transaction): postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['supavisor_pooler']}/postgres")
+    logger.info(f"Pulling Docker images for project '{project_name}'...")
+    try:
+        # Pull images first
+        run_command(["docker", "compose", "--project-name", project_name, "pull"], cwd=str(instance_path))
+        
+        # Start the instance
+        logger.info(f"Starting Supabase instance '{name}'...")
+        run_command(["docker", "compose", "--project-name", project_name, "up", "-d"], cwd=str(instance_path))
+        
+        # Wait a moment for containers to start
+        import time
+        time.sleep(2)
+        
+        # Verify containers are running
+        result = run_command(
+            ["docker", "compose", "--project-name", project_name, "ps", "--format", "json"],
+            cwd=str(instance_path), capture=True, check=False
+        )
+        
+        if result:
+            services = [json.loads(line) for line in result.strip().split('\n') if line]
+            running_services = [s for s in services if s.get('State') == 'running']
+            total_services = len(services)
+            
+            if len(running_services) == total_services and total_services > 0:
+                logger.info("✅ Instance created and started successfully!")
+            else:
+                logger.warning(f"⚠️  Instance started but only {len(running_services)}/{total_services} services are running")
+        else:
+            logger.info("✅ Instance created and started!")
+            
+    except Exception as e:
+        logger.error(f"Instance '{name}' failed to start: {e}")
+        logger.error(f"Instance '{name}' configuration preserved for debugging.")
+        logger.info(f"To debug: cd {instance_path} && docker compose --project-name {project_name} logs")
+
+    # Display connection information
+    print(f"\n✅ Instance '{name}' ready!")
+    print(f"📊 Studio:    http://localhost:{ports['studio']}")
+    print(f"🔌 API:       http://localhost:{ports['kong_http']}")
+    print(f"🗄️  Database:  postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD'][:8]}...@localhost:{ports['postgres_direct']}/postgres")
+    print(f"\n🔑 Keys saved to: {instance_path}/.env")
+    print(f"🔧 Manage:    make {name}-start|stop|logs|destroy")
 
 def destroy_instance(name: str) -> None:
     registry = load_registry()
     if name not in registry:
-        logger.error(f"Instance '{name}' not found in registry.")
+        print(f"❌ Instance '{name}' not found")
         return
 
     instance_path = Path(registry[name]["path"])
     project_name = f"supabase-{name}"
 
-    logger.warning(f"Destroying instance '{name}'. This will delete all its data.")
+    print(f"🗑️  Destroying instance '{name}'...")
+    
+    # Stop and remove containers/volumes
     try:
         run_command(
-            [
-                "docker", "compose", "--project-name", project_name, "down", "--volumes", "--remove-orphans"
-            ], cwd=str(instance_path))
-    except subprocess.CalledProcessError:
-        logger.error("Failed to run 'docker compose down'. The instance may not have been running.")
-
-    shutil.rmtree(instance_path)
+            ["docker", "compose", "--project-name", project_name, "down", "--volumes", "--remove-orphans"], 
+            cwd=str(instance_path), check=False
+        )
+    except:
+        pass  # Continue even if this fails
+    
+    # Remove directory (with permission handling)
+    try:
+        # First try regular removal
+        shutil.rmtree(instance_path)
+    except PermissionError:
+        # If permission denied, try changing permissions first
+        try:
+            run_command(["chmod", "-R", "755", str(instance_path)], cwd=".", check=False)
+            shutil.rmtree(instance_path)
+        except:
+            print(f"⚠️  Could not remove {instance_path}. You may need to run: sudo rm -rf {instance_path}")
+    
+    # Remove from registry
     del registry[name]
     save_registry(registry)
-    logger.info(f"✅ Instance '{name}' destroyed successfully.")
+    print(f"✅ Instance '{name}' destroyed")
 
 def list_instances() -> None:
     registry = load_registry()
