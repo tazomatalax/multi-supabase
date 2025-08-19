@@ -8,7 +8,7 @@ ChatBot-Backend-instance*/
 *.sql
 
 # Supabase template repository - don't commit the entire Supabase repo
-supabase-template/
+./supabase-template/*
 
 # Python virtual environment
 .venv/
