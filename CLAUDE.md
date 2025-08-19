@@ -14,6 +14,11 @@ make create NAME=myproject
 # List all instances
 make list
 
+# View connection details
+make list-details                    # Show ALL connection details for all instances
+make details NAME=myproject          # Show connection details for specific instance
+make update-details NAME=myproject   # Update connection details for existing instance
+
 # Start/stop/restart instances
 make myproject-start
 make myproject-stop  
@@ -85,6 +90,12 @@ Each instance gets:
 - Isolated Docker containers with project-specific names
 - Secure secrets and JWT tokens
 - Complete Supabase stack (Auth, Database, Storage, Edge Functions, etc.)
+- Comprehensive connection details stored in instances.json including:
+  - URLs for all services (localhost, hostname, and Pi IP)
+  - Database connection strings (direct and pooled)
+  - Authentication keys and secrets
+  - Dashboard credentials
+  - System information
 
 ## Development Notes
 

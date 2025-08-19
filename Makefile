@@ -14,6 +14,8 @@ help:
 	@echo "  make create NAME=myproject    Create new instance"
 	@echo "  make create NAME=myproject VERBOSE=1   Create with detailed progress"
 	@echo "  make list                     List all instances"  
+	@echo "  make list-details             Show ALL connection details for all instances"
+	@echo "  make details NAME=myproject   Show connection details for specific instance"
 	@echo "  make destroy NAME=myproject   Destroy instance"
 	@echo ""
 	@echo "Instance Management:"
@@ -64,6 +66,24 @@ ifndef NAME
 	@exit 1
 endif
 	.venv/bin/python setup.py destroy $(NAME)
+
+# Connection details commands
+list-details:
+	.venv/bin/python setup.py details
+
+details:
+ifndef NAME
+	@echo "❌ Usage: make details NAME=myproject"
+	@exit 1
+endif
+	.venv/bin/python setup.py details $(NAME)
+
+update-details:
+ifndef NAME
+	@echo "❌ Usage: make update-details NAME=myproject"
+	@exit 1
+endif
+	.venv/bin/python setup.py update-details $(NAME)
 
 # Dynamic instance commands - these work for any instance name
 %-start:

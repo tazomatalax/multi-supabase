@@ -374,14 +374,88 @@ def create_instance(name: str) -> None:
             f_final.write(f"PHX_HTTP_PORT={instance_values['PHX_HTTP_PORT']}\n")
     logger.info("Successfully created and secured .env file with dynamic ports.")
 
+    # Get system information for connection details
+    import socket
+    hostname = socket.gethostname()
+    try:
+        pi_ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True).stdout.strip().split()[0]
+    except:
+        pi_ip = "127.0.0.1"
+    
+    # Build comprehensive connection details
+    connection_details = {
+        "urls": {
+            "localhost": {
+                "studio": f"http://localhost:{ports['studio']}",
+                "api": f"http://localhost:{ports['kong_http']}",
+                "api_https": f"https://localhost:{ports['kong_https']}",
+                "analytics": f"http://localhost:{ports['analytics']}"
+            },
+            "hostname": {
+                "studio": f"http://{hostname}:{ports['studio']}",
+                "api": f"http://{hostname}:{ports['kong_http']}",
+                "api_https": f"https://{hostname}:{ports['kong_https']}",
+                "analytics": f"http://{hostname}:{ports['analytics']}"
+            },
+            "pi_ip": {
+                "studio": f"http://{pi_ip}:{ports['studio']}",
+                "api": f"http://{pi_ip}:{ports['kong_http']}",
+                "api_https": f"https://{pi_ip}:{ports['kong_https']}",
+                "analytics": f"http://{pi_ip}:{ports['analytics']}"
+            }
+        },
+        "database": {
+            "connection_strings": {
+                "localhost": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['postgres_direct']}/postgres",
+                "hostname": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@{hostname}:{ports['postgres_direct']}/postgres",
+                "pi_ip": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@{pi_ip}:{ports['postgres_direct']}/postgres"
+            },
+            "pooler_connection_strings": {
+                "localhost": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@localhost:{ports['supavisor_pooler']}/postgres",
+                "hostname": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@{hostname}:{ports['supavisor_pooler']}/postgres", 
+                "pi_ip": f"postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD']}@{pi_ip}:{ports['supavisor_pooler']}/postgres"
+            },
+            "host": {
+                "localhost": "localhost",
+                "hostname": hostname,
+                "pi_ip": pi_ip
+            },
+            "port": ports['postgres_direct'],
+            "pooler_port": ports['supavisor_pooler'],
+            "database": "postgres",
+            "username": "postgres",
+            "password": secrets_dict['POSTGRES_PASSWORD']
+        },
+        "auth": {
+            "anon_key": secrets_dict['ANON_KEY'],
+            "service_role_key": secrets_dict['SERVICE_ROLE_KEY'],
+            "jwt_secret": secrets_dict['JWT_SECRET']
+        },
+        "dashboard": {
+            "username": secrets_dict['DASHBOARD_USERNAME'],
+            "password": secrets_dict['DASHBOARD_PASSWORD']
+        },
+        "system_info": {
+            "hostname": hostname,
+            "pi_ip": pi_ip,
+            "project_name": project_name
+        }
+    }
+
     # Ensure all required port keys are present
     required_port_keys = ["kong_http", "kong_https", "postgres_direct", "supavisor_pooler", "studio", "analytics"]
     for key in required_port_keys:
         if key not in ports:
             logger.warning(f"Port key '{key}' missing in ports dict for instance '{name}'.")
             ports[key] = None
-    logger.debug(f"Saving registry entry for instance '{name}': {{'id': {instance_id}, 'path': str(instance_path), 'ports': ports}}")
-    registry[name] = {"id": instance_id, "path": str(instance_path), "ports": ports}
+    
+    logger.debug(f"Saving registry entry for instance '{name}': {{'id': {instance_id}, 'path': str(instance_path), 'ports': ports, 'connection_details': connection_details}}")
+    registry[name] = {
+        "id": instance_id, 
+        "path": str(instance_path), 
+        "ports": ports,
+        "connection_details": connection_details
+    }
     try:
         save_registry(registry)
         logger.info(f"Registry updated successfully for instance '{name}'.")
@@ -481,11 +555,13 @@ def create_instance(name: str) -> None:
 
     # Display connection information
     print(f"\n✅ Instance '{name}' ready!")
-    print(f"📊 Studio:    http://localhost:{ports['studio']}")
-    print(f"🔌 API:       http://localhost:{ports['kong_http']}")
-    print(f"🗄️  Database:  postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD'][:8]}...@localhost:{ports['postgres_direct']}/postgres")
-    print(f"\n🔑 Keys saved to: {instance_path}/.env")
-    print(f"🔧 Manage:    make {name}-start|stop|logs|destroy")
+    print(f"📊 Studio:      http://localhost:{ports['studio']} | http://{hostname}:{ports['studio']} | http://{pi_ip}:{ports['studio']}")
+    print(f"🔌 API:         http://localhost:{ports['kong_http']} | http://{hostname}:{ports['kong_http']} | http://{pi_ip}:{ports['kong_http']}")
+    print(f"🗄️  Database:    postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD'][:8]}...@localhost:{ports['postgres_direct']}/postgres")
+    print(f"🎯 Pooler:      postgresql://postgres:{secrets_dict['POSTGRES_PASSWORD'][:8]}...@localhost:{ports['supavisor_pooler']}/postgres")
+    print(f"📈 Analytics:   http://localhost:{ports['analytics']} | http://{hostname}:{ports['analytics']} | http://{pi_ip}:{ports['analytics']}")
+    print(f"\n🔑 Keys & connections: View complete details with 'make list-details' or check instances.json")
+    print(f"🔧 Manage:      make {name}-start|stop|logs|destroy")
 
 def destroy_instance(name: str) -> None:
     registry = load_registry()
@@ -524,6 +600,180 @@ def destroy_instance(name: str) -> None:
     save_registry(registry)
     print(f"✅ Instance '{name}' destroyed")
 
+def update_connection_details(name: str) -> None:
+    """Update connection details for an existing instance."""
+    registry = load_registry()
+    if name not in registry:
+        print(f"❌ Instance '{name}' not found")
+        return
+    
+    instance_path = Path(registry[name]["path"])
+    env_path = instance_path / ".env"
+    
+    if not env_path.exists():
+        print(f"❌ Environment file not found: {env_path}")
+        return
+    
+    # Read secrets from .env file
+    secrets_dict = {}
+    with open(env_path, 'r') as f:
+        for line in f:
+            if '=' in line and not line.strip().startswith('#'):
+                key, value = line.strip().split('=', 1)
+                if key in ['POSTGRES_PASSWORD', 'JWT_SECRET', 'ANON_KEY', 'SERVICE_ROLE_KEY', 'DASHBOARD_USERNAME', 'DASHBOARD_PASSWORD']:
+                    secrets_dict[key] = value
+    
+    # Get system information
+    import socket
+    hostname = socket.gethostname()
+    try:
+        pi_ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True).stdout.strip().split()[0]
+    except:
+        pi_ip = "127.0.0.1"
+    
+    ports = registry[name]["ports"]
+    project_name = f"supabase-{name}"
+    
+    # Build comprehensive connection details
+    connection_details = {
+        "urls": {
+            "localhost": {
+                "studio": f"http://localhost:{ports['studio']}",
+                "api": f"http://localhost:{ports['kong_http']}",
+                "api_https": f"https://localhost:{ports['kong_https']}",
+                "analytics": f"http://localhost:{ports['analytics']}"
+            },
+            "hostname": {
+                "studio": f"http://{hostname}:{ports['studio']}",
+                "api": f"http://{hostname}:{ports['kong_http']}",
+                "api_https": f"https://{hostname}:{ports['kong_https']}",
+                "analytics": f"http://{hostname}:{ports['analytics']}"
+            },
+            "pi_ip": {
+                "studio": f"http://{pi_ip}:{ports['studio']}",
+                "api": f"http://{pi_ip}:{ports['kong_http']}",
+                "api_https": f"https://{pi_ip}:{ports['kong_https']}",
+                "analytics": f"http://{pi_ip}:{ports['analytics']}"
+            }
+        },
+        "database": {
+            "connection_strings": {
+                "localhost": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@localhost:{ports['postgres_direct']}/postgres",
+                "hostname": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@{hostname}:{ports['postgres_direct']}/postgres",
+                "pi_ip": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@{pi_ip}:{ports['postgres_direct']}/postgres"
+            },
+            "pooler_connection_strings": {
+                "localhost": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@localhost:{ports['supavisor_pooler']}/postgres",
+                "hostname": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@{hostname}:{ports['supavisor_pooler']}/postgres", 
+                "pi_ip": f"postgresql://postgres:{secrets_dict.get('POSTGRES_PASSWORD', 'unknown')}@{pi_ip}:{ports['supavisor_pooler']}/postgres"
+            },
+            "host": {
+                "localhost": "localhost",
+                "hostname": hostname,
+                "pi_ip": pi_ip
+            },
+            "port": ports['postgres_direct'],
+            "pooler_port": ports['supavisor_pooler'],
+            "database": "postgres",
+            "username": "postgres",
+            "password": secrets_dict.get('POSTGRES_PASSWORD', 'unknown')
+        },
+        "auth": {
+            "anon_key": secrets_dict.get('ANON_KEY', 'unknown'),
+            "service_role_key": secrets_dict.get('SERVICE_ROLE_KEY', 'unknown'),
+            "jwt_secret": secrets_dict.get('JWT_SECRET', 'unknown')
+        },
+        "dashboard": {
+            "username": secrets_dict.get('DASHBOARD_USERNAME', 'unknown'),
+            "password": secrets_dict.get('DASHBOARD_PASSWORD', 'unknown')
+        },
+        "system_info": {
+            "hostname": hostname,
+            "pi_ip": pi_ip,
+            "project_name": project_name
+        }
+    }
+    
+    # Update registry
+    registry[name]["connection_details"] = connection_details
+    save_registry(registry)
+    print(f"✅ Updated connection details for instance '{name}'")
+
+def show_connection_details(name: str = None) -> None:
+    """Display detailed connection information for one or all instances."""
+    registry = load_registry()
+    if not registry:
+        print("No instances found.")
+        return
+    
+    instances_to_show = [name] if name and name in registry else list(registry.keys())
+    
+    if name and name not in registry:
+        print(f"❌ Instance '{name}' not found")
+        return
+    
+    for instance_name in sorted(instances_to_show):
+        data = registry[instance_name]
+        print(f"\n{'='*80}")
+        print(f"🚀 INSTANCE: {instance_name} (ID: {data['id']})")
+        print(f"{'='*80}")
+        
+        # Check if connection_details exists
+        if "connection_details" not in data:
+            print("⚠️  Connection details not available. Updating...")
+            update_connection_details(instance_name)
+            registry = load_registry()  # Reload after update
+            data = registry[instance_name]
+        
+        if "connection_details" not in data:
+            print("❌ Failed to generate connection details")
+            continue
+            
+        conn = data["connection_details"]
+        
+        print(f"\n📊 STUDIO URLs:")
+        print(f"   Localhost: {conn['urls']['localhost']['studio']}")
+        print(f"   Hostname:  {conn['urls']['hostname']['studio']}")
+        print(f"   Pi IP:     {conn['urls']['pi_ip']['studio']}")
+        
+        print(f"\n🔌 API URLs:")
+        print(f"   HTTP Localhost: {conn['urls']['localhost']['api']}")
+        print(f"   HTTP Hostname:  {conn['urls']['hostname']['api']}")
+        print(f"   HTTP Pi IP:     {conn['urls']['pi_ip']['api']}")
+        print(f"   HTTPS Localhost: {conn['urls']['localhost']['api_https']}")
+        print(f"   HTTPS Hostname:  {conn['urls']['hostname']['api_https']}")
+        print(f"   HTTPS Pi IP:     {conn['urls']['pi_ip']['api_https']}")
+        
+        print(f"\n📈 ANALYTICS URLs:")
+        print(f"   Localhost: {conn['urls']['localhost']['analytics']}")
+        print(f"   Hostname:  {conn['urls']['hostname']['analytics']}")
+        print(f"   Pi IP:     {conn['urls']['pi_ip']['analytics']}")
+        
+        print(f"\n🗄️  DATABASE CONNECTION STRINGS:")
+        print(f"   Direct - Localhost: {conn['database']['connection_strings']['localhost']}")
+        print(f"   Direct - Hostname:  {conn['database']['connection_strings']['hostname']}")
+        print(f"   Direct - Pi IP:     {conn['database']['connection_strings']['pi_ip']}")
+        
+        print(f"\n🎯 POOLER CONNECTION STRINGS:")
+        print(f"   Pooler - Localhost: {conn['database']['pooler_connection_strings']['localhost']}")
+        print(f"   Pooler - Hostname:  {conn['database']['pooler_connection_strings']['hostname']}")
+        print(f"   Pooler - Pi IP:     {conn['database']['pooler_connection_strings']['pi_ip']}")
+        
+        print(f"\n🔐 AUTHENTICATION KEYS:")
+        print(f"   Anon Key: {conn['auth']['anon_key']}")
+        print(f"   Service Role Key: {conn['auth']['service_role_key']}")
+        print(f"   JWT Secret: {conn['auth']['jwt_secret'][:32]}...")
+        
+        print(f"\n👤 DASHBOARD CREDENTIALS:")
+        print(f"   Username: {conn['dashboard']['username']}")
+        print(f"   Password: {conn['dashboard']['password']}")
+        
+        print(f"\n🖥️  SYSTEM INFO:")
+        print(f"   Hostname: {conn['system_info']['hostname']}")
+        print(f"   Pi IP: {conn['system_info']['pi_ip']}")
+        print(f"   Project Name: {conn['system_info']['project_name']}")
+        print(f"   Config Path: {data['path']}")
+
 def list_instances() -> None:
     registry = load_registry()
     if not registry:
@@ -552,6 +802,8 @@ def list_instances() -> None:
             pass
 
         print(f"{name:<20} {data['id']:<5} {status:<20} {data['ports']['kong_http']:<8} {data['ports']['postgres_direct']:<8} {data['ports']['supavisor_pooler']}")
+    
+    print(f"\n💡 Use 'python setup.py details [instance-name]' for complete connection information")
 
 def main():
     INSTANCES_ROOT_DIR.mkdir(exist_ok=True)
@@ -570,6 +822,12 @@ def main():
     destroy_parser.add_argument("name", help="The name of the instance to destroy.")
 
     subparsers.add_parser("list", help="List all managed Supabase instances and their status.")
+    
+    details_parser = subparsers.add_parser("details", help="Show detailed connection information for instances.")
+    details_parser.add_argument("name", nargs='?', help="(Optional) Specific instance name to show details for. Shows all if omitted.")
+    
+    update_details_parser = subparsers.add_parser("update-details", help="Update connection details for an existing instance.")
+    update_details_parser.add_argument("name", help="Instance name to update connection details for.")
     
     subparsers.add_parser("setup", help="One-time setup: clone template and validate environment.")
 
@@ -598,6 +856,10 @@ def main():
             print("\nDeletion cancelled.")
     elif args.command == "list":
         list_instances()
+    elif args.command == "details":
+        show_connection_details(args.name)
+    elif args.command == "update-details":
+        update_connection_details(args.name)
     elif args.command in pass_through_cmds:
         registry = load_registry()
         if args.name not in registry:

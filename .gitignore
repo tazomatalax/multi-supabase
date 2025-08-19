@@ -1,11 +1,14 @@
 ./instance*/*
 instance_registry.json
 
-# Instance folders - exclude all instance directories
+# Instance folders - exclude all instance directories  
 instance*/
 ChatBot-Backend-instance*/
 *-instance*/
 *.sql
+
+# Instances registry with sensitive connection details
+instances/instances.json
 
 # Supabase template repository - don't commit the entire Supabase repo
 supabase-template/*
