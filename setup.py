@@ -135,28 +135,74 @@ def generate_secrets() -> Dict[str, str]:
         "DASHBOARD_PASSWORD": secrets.token_urlsafe(24),
     }
 
-def clone_supabase_template() -> None:
-    """Clone or update the Supabase template repository."""
-    if SUPABASE_TEMPLATE_DIR.exists():
-        logger.info("Updating Supabase template from git...")
-        try:
-            # Check if it's a git repository
-            run_command(["git", "status"], cwd=str(SUPABASE_TEMPLATE_DIR), check=False)
-            run_command(["git", "pull"], cwd=str(SUPABASE_TEMPLATE_DIR))
-        except subprocess.CalledProcessError:
-            logger.warning("Template directory exists but is not a git repo. Removing and re-cloning...")
-            shutil.rmtree(SUPABASE_TEMPLATE_DIR)
-            clone_supabase_template()
-    else:
-        logger.info("Cloning Supabase repository for template...")
-        run_command(
-            [
-                "git", "clone", "--depth", "1", "--single-branch",
-                "https://github.com/supabase/supabase",
-                str(SUPABASE_TEMPLATE_DIR)
-            ], cwd=str(BASE_DIR)
-        )
-        logger.info("Template cloned successfully")
+def ensure_template_exists() -> bool:
+    """Ensure template exists and is valid. Auto-repair if needed."""
+    if not SUPABASE_TEMPLATE_DIR.exists():
+        print("📥 Cloning Supabase template...")
+        return clone_fresh_template()
+    
+    # Validate existing template
+    docker_path = SUPABASE_TEMPLATE_DIR / "docker"
+    compose_path = docker_path / "docker-compose.yml"
+    
+    if not docker_path.exists() or not compose_path.exists():
+        print("🔧 Template appears corrupted, re-cloning...")
+        shutil.rmtree(SUPABASE_TEMPLATE_DIR)
+        return clone_fresh_template()
+    
+    # Check if it's a valid git repo
+    try:
+        run_command(["git", "status"], cwd=str(SUPABASE_TEMPLATE_DIR), check=False, capture=True)
+        print("✅ Template validated successfully")
+        return True
+    except:
+        print("⚠️  Template directory exists but is not a valid git repo, re-cloning...")
+        shutil.rmtree(SUPABASE_TEMPLATE_DIR)
+        return clone_fresh_template()
+
+def clone_fresh_template() -> bool:
+    """Clone a fresh copy of the Supabase template."""
+    try:
+        run_command([
+            "git", "clone", "--depth", "1", "--single-branch",
+            "https://github.com/supabase/supabase",
+            str(SUPABASE_TEMPLATE_DIR)
+        ], cwd=str(BASE_DIR))
+        print("✅ Template cloned successfully")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to clone template: {e}")
+        print("   Please check your internet connection and try again.")
+        return False
+
+def setup_command() -> None:
+    """One-time setup: clone template and validate environment."""
+    print("🔧 Setting up Supabase Instance Manager...")
+    
+    if not ensure_template_exists():
+        print("❌ Setup failed: Could not prepare template")
+        return
+    
+    print("🔍 Validating environment...")
+    
+    # Test Docker
+    try:
+        result = run_command(["docker", "--version"], cwd=".", capture=True)
+        print(f"✅ Docker: {result}")
+    except:
+        print("❌ Docker not found or not working")
+        return
+    
+    # Test Git
+    try:
+        result = run_command(["git", "--version"], cwd=".", capture=True)
+        print(f"✅ Git: {result}")
+    except:
+        print("❌ Git not found or not working")
+        return
+    
+    print("✅ Setup complete! You can now create instances with 'make create NAME=yourproject'")
+
 
 def remove_container_names_from_compose(compose_path: Path) -> None:
     """Remove all 'container_name:' lines from the docker-compose.yml file."""
@@ -248,22 +294,12 @@ def create_instance(name: str) -> None:
 
     print(f"🚀 Creating instance '{name}' (ID: {instance_id})...")
     
-    # Cleanup on failure
-    def cleanup():
-        if instance_path.exists():
-            shutil.rmtree(instance_path, ignore_errors=True)
+    # Ensure template exists and is valid
+    if not ensure_template_exists():
+        print("❌ Failed to prepare template. Run 'make setup' first.")
+        return
     
-    try:
-        clone_supabase_template()
-    except Exception as e:
-        print(f"❌ Failed to prepare template: {e}")
-        cleanup()
-        return
-
     template_docker_path = SUPABASE_TEMPLATE_DIR / "docker"
-    if not template_docker_path.exists():
-        logger.error(f"Template docker directory not found: {template_docker_path}")
-        return
     
     try:
         shutil.copytree(template_docker_path, instance_path, dirs_exist_ok=True)
@@ -464,6 +500,8 @@ def main():
     destroy_parser.add_argument("name", help="The name of the instance to destroy.")
 
     subparsers.add_parser("list", help="List all managed Supabase instances and their status.")
+    
+    subparsers.add_parser("setup", help="One-time setup: clone template and validate environment.")
 
     pass_through_cmds = ["start", "stop", "restart", "logs", "ps"]
     for cmd in pass_through_cmds:
@@ -475,6 +513,8 @@ def main():
 
     if args.command == "create":
         create_instance(args.name)
+    elif args.command == "setup":
+        setup_command()
     elif args.command == "destroy":
         try:
             confirm = input(f"Are you sure you want to permanently delete instance '{args.name}' and all its data? (y/n): ")

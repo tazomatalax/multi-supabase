@@ -1,11 +1,14 @@
 # Supabase Instance Manager - Makefile
 # Simplified commands for managing multiple Supabase instances
 
-.PHONY: help list create destroy deps
+.PHONY: help list create destroy deps setup clean
 
 # Default target
 help:
 	@echo "🚀 Supabase Instance Manager"
+	@echo ""
+	@echo "🔧 First Time Setup:"
+	@echo "  make setup                    One-time setup (clone template, install deps)"
 	@echo ""
 	@echo "Quick Commands:"
 	@echo "  make create NAME=myproject    Create new instance"
@@ -19,13 +22,20 @@ help:
 	@echo "  make myproject-logs           View logs"
 	@echo "  make myproject-ps             Show status"
 	@echo ""
-	@echo "Setup:"
-	@echo "  make deps                     Install dependencies"
+	@echo "Maintenance:"
+	@echo "  make deps                     Install dependencies only"
 
-# Install dependencies
+# One-time setup: dependencies + template
+setup:
+	@echo "🔧 Setting up Supabase Instance Manager..."
+	@$(MAKE) deps
+	@python3 setup.py setup
+	@echo "✅ Setup complete! You can now create instances."
+
+# Install dependencies only
 deps:
 	@echo "📦 Installing dependencies..."
-	pip install pyjwt
+	pip install -r requirements.txt
 	@which docker > /dev/null || (echo "❌ Docker not found. Please install Docker." && exit 1)
 	@which git > /dev/null || (echo "❌ Git not found. Please install Git." && exit 1)
 	@echo "✅ Dependencies ready"
