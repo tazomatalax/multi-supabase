@@ -1,0 +1,242 @@
+---
+description: Claude Code Multi-Instance Configuration
+globs: "instances/**/*,supabase-template/**/*,setup.py,Makefile,CLAUDE.md"
+alwaysApply: true
+---
+
+# Claude Code Multi-Instance Configuration
+
+Comprehensive configuration for Claude Code to work effectively with the multi-Supabase instance manager.
+
+## Project Architecture Understanding
+
+This project manages multiple isolated Supabase instances with the following structure:
+
+```
+multi-supabase/
+├── setup.py                 # Python instance manager
+├── Makefile                 # Convenience commands  
+├── CLAUDE.md               # Claude Code documentation
+├── instances/              # All created instances
+│   ├── instance-name/      # Individual instance
+│   │   ├── .env           # Unique secrets & ports
+│   │   ├── docker-compose.yml
+│   │   └── volumes/       # Persistent data
+│   └── instances.json     # Instance registry
+└── supabase-template/     # Supabase source template
+    └── apps/              # Supabase applications
+        ├── docs/          # Documentation app
+        ├── studio/        # Studio app  
+        └── www/           # Website
+```
+
+## Context-Aware Operations
+
+### Instance Discovery
+Before any operations, Claude Code should understand the current state:
+
+```bash
+# Check what instances exist and their status
+make list
+
+# Understand project structure
+ls -la instances/
+cat instances/instances.json
+
+# Check template status
+ls -la supabase-template/
+```
+
+### Working Context Identification
+
+1. **Template Development**: Working in `supabase-template/`
+   - Changes affect all future instances
+   - Core development work
+   - Testing against template environment
+
+2. **Instance-Specific Work**: Working in `instances/{name}/`
+   - Instance-specific configuration
+   - Testing against real instance data
+   - Isolated environment
+
+3. **Management Operations**: Working with `setup.py`, `Makefile`
+   - Instance lifecycle management
+   - System-level configuration
+
+## Multi-Instance Command Patterns
+
+### Instance Management Commands
+```bash
+# Create new instance (generates unique ports/secrets)
+make create NAME=project-name
+
+# Instance operations
+make project-name-start      # Start specific instance
+make project-name-stop       # Stop specific instance  
+make project-name-restart    # Restart specific instance
+make project-name-logs       # View instance logs
+make project-name-destroy    # Destroy instance (with confirmation)
+
+# List all instances with status
+make list
+```
+
+### Development Commands by Context
+
+#### Template Development
+```bash
+cd supabase-template/
+
+# Install dependencies
+pnpm install
+
+# Run development servers
+pnpm run -F docs dev
+pnpm run -F studio dev
+
+# Run tests
+pnpm run -F docs test:local:unwatch
+pnpm run -F studio test
+```
+
+#### Instance-Specific Development  
+```bash
+cd instances/{instance-name}/
+
+# Use instance-specific environment
+source .env  # Get instance ports/secrets
+
+# Run tests against instance
+pnpm run -F docs test:local:unwatch
+pnpm run -F studio test
+
+# Database operations
+pnpm supabase db reset --local
+pnpm supabase db push
+```
+
+## Port and Service Management
+
+### Port Allocation
+Each instance gets unique ports to prevent conflicts:
+- API: 8001 + instance_id
+- Studio: 3001 + instance_id  
+- Database: 5433 + instance_id
+- HTTPS: 8444 + instance_id
+
+### Service Access
+Check instance-specific `.env` for exact ports:
+```bash
+# View instance configuration
+cat instances/{name}/.env
+
+# Access services
+# Studio: http://localhost:{STUDIO_PORT}
+# API: http://localhost:{KONG_HTTP_PORT}
+# DB: postgresql://postgres:{PASSWORD}@localhost:{POSTGRES_PORT}/postgres
+```
+
+## Testing Strategy
+
+### Multi-Level Testing
+1. **Template Tests**: Ensure core functionality
+2. **Instance Tests**: Validate against real data
+3. **Integration Tests**: Cross-instance compatibility
+
+### Test Commands by Context
+```bash
+# Template testing
+cd supabase-template/apps/docs
+pnpm supabase status
+pnpm supabase start
+pnpm supabase db reset --local  
+pnpm run -F docs test:local:unwatch
+
+# Instance testing
+cd instances/{name}/apps/docs
+# Use instance-specific Supabase commands
+pnpm run -F docs test:local:unwatch
+```
+
+## Security Considerations
+
+### Secret Management
+- Each instance has unique JWT secrets (512-bit)
+- Database passwords are cryptographically generated
+- Secrets stored in instance-specific `.env` files
+- Never commit `.env` files to version control
+
+### Instance Isolation
+- Docker containers use project-specific naming
+- Isolated networks prevent cross-contamination
+- Independent data volumes
+- Separate port allocations
+
+## Troubleshooting Guide
+
+### Common Issues & Solutions
+
+1. **Port Conflicts**
+   ```bash
+   make list  # Check port assignments
+   cat instances/{name}/.env  # Verify specific ports
+   ```
+
+2. **Service Startup Failures**
+   ```bash
+   make {instance}-logs  # Check logs
+   make {instance}-restart  # Restart services
+   ```
+
+3. **Template Issues**
+   ```bash
+   make setup  # Re-clone template
+   ```
+
+4. **Database Connection Issues**
+   ```bash
+   cd instances/{name}
+   pnpm supabase status  # Check service status
+   pnpm supabase db reset --local  # Reset database
+   ```
+
+### Debug Commands
+```bash
+# Docker status
+docker ps | grep supabase-{instance-name}
+
+# Manual Docker operations
+cd instances/{instance-name}
+docker compose --project-name supabase-{name} ps
+docker compose --project-name supabase-{name} logs
+
+# Registry inspection
+cat instances/instances.json | jq '.'
+```
+
+## Claude Code Best Practices
+
+1. **Context Awareness**: Always determine if working with template or instance
+2. **Instance State**: Check `make list` before operations
+3. **Port Management**: Use instance-specific ports from `.env`
+4. **Testing Isolation**: Test in appropriate context (template vs instance)
+5. **Cleanup**: Destroy unused instances to conserve resources
+6. **Documentation**: Keep CLAUDE.md updated with project changes
+
+## Integration Patterns
+
+### File Operations
+- Always check if working in `supabase-template/` vs `instances/{name}/`
+- Use appropriate paths for file reads/writes
+- Consider multi-instance impact of changes
+
+### Service Operations  
+- Use `make` commands for instance management
+- Check service status before operations
+- Use instance-specific environment variables
+
+### Development Workflow
+- Develop in template, test in instances
+- Create isolated instances for feature work
+- Coordinate testing across multiple environments
+- Clean up when features are complete

@@ -1,0 +1,134 @@
+---
+description: Claude Code Instance Management Guidelines
+globs: setup.py,Makefile,instances/**/*,CLAUDE.md
+alwaysApply: true
+---
+
+# Claude Code Instance Management Guidelines
+
+Essential patterns for working with the multi-Supabase instance manager in Claude Code.
+
+## Core Commands Reference
+
+### Instance Lifecycle
+```bash
+# Setup (one-time)
+make setup
+
+# Create new instance
+make create NAME=myproject
+
+# List all instances with status
+make list
+
+# Instance operations
+make myproject-start
+make myproject-stop
+make myproject-restart
+make myproject-logs
+make myproject-destroy  # With confirmation
+```
+
+## Working with Instances in Claude Code
+
+### Before Making Changes
+Always check the current state:
+```bash
+make list  # See all instances and their ports
+python setup.py list  # Alternative direct call
+```
+
+### Instance Directory Structure
+Each instance follows this pattern:
+```
+instances/
+├── instance-name/
+│   ├── .env              # Unique secrets and ports
+│   ├── docker-compose.yml
+│   └── volumes/          # Persistent data
+└── instances.json        # Registry of all instances
+```
+
+### Port Management
+- Ports are automatically allocated to avoid conflicts
+- Check `instances/{name}/.env` for specific port assignments
+- Base ports start from: API (8001), Studio (3001), DB (5433)
+
+### Security Considerations
+- Each instance has unique JWT secrets (512-bit)
+- Database passwords are cryptographically secure
+- Never commit `.env` files
+- Secrets are stored locally only
+
+## Development Workflows
+
+### Creating Development Instance
+```bash
+# Create instance for feature work
+make create NAME=feature-branch-name
+
+# Access services
+# Studio: http://localhost:{STUDIO_PORT}
+# API: http://localhost:{KONG_HTTP_PORT}  
+# DB: check .env for connection details
+```
+
+### Multi-Instance Development
+```bash
+# Work on multiple features simultaneously
+make create NAME=feature-a
+make create NAME=feature-b
+make create NAME=staging
+
+# Each runs on different ports automatically
+make list  # See all running instances
+```
+
+### Testing Across Instances
+```bash
+# Test template changes
+cd supabase-template/apps/docs
+pnpm run -F docs test:local:unwatch
+
+# Test against specific instance
+cd instances/myproject/apps/docs  
+pnpm run -F docs test:local:unwatch
+```
+
+## Troubleshooting
+
+### Common Issues
+1. **Port Conflicts**: Use `make list` to check port assignments
+2. **Service Start Failures**: Check logs with `make {name}-logs`
+3. **Template Issues**: Re-run `make setup` to refresh template
+4. **Permission Errors**: May need `chmod -R 755` on instance directories
+
+### Debug Commands
+```bash
+# Check Docker status
+docker ps | grep supabase-{instance-name}
+
+# View instance logs
+make {instance-name}-logs
+
+# Manual Docker operations
+cd instances/{instance-name}
+docker compose --project-name supabase-{name} ps
+```
+
+## Best Practices
+
+1. **Naming**: Use descriptive instance names (project-dev, feature-auth, etc.)
+2. **Cleanup**: Regularly destroy unused instances to save resources
+3. **Backup**: Important data should be migrated/exported before destroying
+4. **Development**: Use separate instances for different features/environments
+5. **Testing**: Always test in isolated instance before affecting others
+
+## Integration with Claude Code
+
+When Claude Code works with this project:
+- Use `make list` to understand current instance state
+- Always specify which instance you're working with
+- Check port assignments before making network-related changes
+- Use instance-specific paths for file operations
+- Leverage the CLAUDE.md file for project context

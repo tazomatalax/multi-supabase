@@ -1,0 +1,51 @@
+---
+description: Claude Code Testing Guidelines for Studio
+globs: apps/studio/**/*.test.ts,apps/studio/**/*.test.tsx,instances/*/apps/studio/**/*.test.ts
+alwaysApply: false
+---
+
+# Studio Testing Guidelines for Claude Code
+
+When working with tests in the studio application across multiple instances:
+
+## Before Running Tests
+
+1. **Ensure Supabase Instance is Running**:
+   ```bash
+   make list  # Check which instances exist
+   make {instance-name}-start  # Start the instance if needed
+   ```
+
+2. **For Template Development** (supabase-template/apps/studio):
+   ```bash
+   cd supabase-template/apps/studio
+   # Follow studio-specific test guidelines
+   ```
+
+3. **For Instance-Specific Testing**:
+   ```bash
+   cd instances/{instance-name}/apps/studio
+   # Run tests against specific instance
+   ```
+
+## Test Execution Commands
+
+```bash
+# Run all studio tests
+pnpm run -F studio test
+
+# Run tests in watch mode  
+pnpm run -F studio test:watch
+
+# Run specific test file
+pnpm run -F studio test -- path/to/test.spec.ts
+```
+
+## Multi-Instance Considerations
+
+- Each instance has isolated test environments
+- Use the correct instance ports when testing API integrations
+- Ensure database state is clean before running tests
+- Consider cross-instance test isolation
+
+Make sure to follow the guidelines in the studio test README for detailed testing procedures.

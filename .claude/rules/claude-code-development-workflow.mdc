@@ -1,0 +1,125 @@
+---
+description: Claude Code Development Workflow for Multi-Supabase
+globs: "**/*.py,**/*.ts,**/*.tsx,**/Makefile,**/.env.example"
+alwaysApply: false
+---
+
+# Claude Code Development Workflow
+
+Optimized development patterns for working with the multi-Supabase instance manager using Claude Code.
+
+## Initial Project Setup
+
+When Claude Code first works with this project:
+
+1. **Understand Project State**:
+   ```bash
+   make list                    # Check existing instances
+   cat CLAUDE.md               # Read project context
+   python setup.py list       # Alternative instance check
+   ```
+
+2. **Setup Environment** (if needed):
+   ```bash
+   make setup                  # One-time template setup
+   pip install -r requirements.txt  # Python dependencies
+   ```
+
+## Development Patterns
+
+### Feature Development
+```bash
+# Create isolated instance for feature work
+make create NAME=feature-{feature-name}
+
+# Develop in template, test in instance
+cd supabase-template/          # Make changes here
+cd instances/feature-{name}/   # Test changes here
+
+# Clean up when done
+make feature-{name}-destroy
+```
+
+### Testing & Validation
+```bash
+# Before making changes - check what exists
+make list
+
+# After changes - validate services
+make {instance}-logs
+make {instance}-start  # if needed
+
+# Run tests appropriately
+cd supabase-template/apps/docs && pnpm run -F docs test:local:unwatch
+cd instances/{name}/apps/docs && pnpm run -F docs test:local:unwatch
+```
+
+### Database Operations
+```bash
+# Each instance has isolated database
+# Connection details in instances/{name}/.env
+
+# Reset specific instance database  
+cd instances/{name}
+pnpm supabase db reset --local
+
+# Migrate specific instance
+cd instances/{name}
+pnpm supabase db push
+```
+
+## File Organization Awareness
+
+### Template vs Instance Files
+- **Template**: `supabase-template/` - Core development, shared changes
+- **Instances**: `instances/{name}/` - Instance-specific configs, testing
+- **Manager**: `setup.py`, `Makefile` - Instance lifecycle management
+
+### Configuration Files
+- `instances/{name}/.env` - Instance secrets (never commit)
+- `instances/{name}/docker-compose.yml` - Instance service config
+- `instances/instances.json` - Registry of all instances
+- `CLAUDE.md` - Project documentation for Claude Code
+
+## Common Tasks for Claude Code
+
+
+### Debugging Issues
+1. Check instance status: `make list`
+2. View logs: `make {instance}-logs`
+3. Inspect configuration: `cat instances/{name}/.env`
+4. Manual Docker inspection if needed
+
+### Multi-Instance Coordination
+1. Understand port allocations (each instance unique)
+2. Use instance-specific database connections
+3. Coordinate testing across multiple instances
+4. Clean up unused instances regularly
+
+## Integration Points
+
+### Python Instance Manager (`setup.py`)
+- Creates and manages Docker-based instances
+- Handles port allocation and secrets
+- Maintains instance registry
+- Provides start/stop/destroy operations
+
+### Makefile Commands
+- Wraps `setup.py` with convenient targets
+- Provides instance-specific operations
+- Handles common development workflows
+
+### Docker Integration
+- Each instance runs in isolated Docker environment
+- Project-specific naming prevents conflicts
+- Volume persistence for data
+- Health checking and service management
+
+## Best Practices for Claude Code
+
+1. **Always Check Context**: Use `make list` to understand current state
+2. **Instance Isolation**: Each instance is completely independent
+3. **Port Awareness**: Check `.env` files for service ports
+4. **Testing Strategy**: Test in instance context, develop in template
+5. **Cleanup**: Destroy unused instances to conserve resources
+6. **Documentation**: Update CLAUDE.md when making significant changes

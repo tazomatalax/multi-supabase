@@ -12,6 +12,7 @@ help:
 	@echo ""
 	@echo "Quick Commands:"
 	@echo "  make create NAME=myproject    Create new instance"
+	@echo "  make create NAME=myproject VERBOSE=1   Create with detailed progress"
 	@echo "  make list                     List all instances"  
 	@echo "  make destroy NAME=myproject   Destroy instance"
 	@echo ""
@@ -45,10 +46,14 @@ deps:
 # Core instance management
 create:
 ifndef NAME
-	@echo "❌ Usage: make create NAME=myproject"
+	@echo "❌ Usage: make create NAME=myproject [VERBOSE=1]"
 	@exit 1
 endif
+ifdef VERBOSE
+	.venv/bin/python setup.py create $(NAME) --verbose
+else
 	.venv/bin/python setup.py create $(NAME)
+endif
 
 list:
 	.venv/bin/python setup.py list

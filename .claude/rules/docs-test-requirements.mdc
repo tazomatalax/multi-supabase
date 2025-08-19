@@ -1,0 +1,78 @@
+---
+description: Claude Code Docs Testing Procedure  
+globs: apps/docs/**/*.test.ts,supabase-template/apps/docs/**/*.test.ts,instances/*/apps/docs/**/*.test.ts
+alwaysApply: false
+---
+
+# Docs Test Requirements for Claude Code
+
+Guidelines for running tests in the docs application across multi-instance environments.
+
+## Multi-Instance Testing Approach
+
+### 1. Template Development Testing
+For working on the main Supabase template:
+```bash
+cd supabase-template/apps/docs
+
+# Check Supabase status
+pnpm supabase status
+
+# Start Supabase if not running
+pnpm supabase start
+
+# Reset database for clean state
+pnpm supabase db reset --local
+
+# Run tests
+pnpm run -F docs test:local:unwatch
+```
+
+### 2. Instance-Specific Testing
+For testing against a specific instance:
+```bash
+# First ensure your instance is running
+make list  # Check available instances
+make {instance-name}-start  # Start if needed
+
+cd instances/{instance-name}/apps/docs
+
+# Use instance-specific Supabase commands
+pnpm supabase status --project-id {instance-name}
+pnpm supabase db reset --local --project-id {instance-name}
+pnpm run -F docs test:local:unwatch
+```
+
+## Required Test Execution Steps
+
+1. **Environment Check**: Always verify Supabase status before tests
+2. **Database Reset**: Reset to ensure clean test state  
+3. **Test Execution**: Use unwatch mode for CI/automated testing
+4. **Instance Isolation**: Each instance maintains separate test environments
+
+## Common Commands
+
+```bash
+# Template testing (main development)
+cd supabase-template && pnpm run -F docs test:local:unwatch
+
+# Instance testing (specific deployment)
+cd instances/{name} && pnpm run -F docs test:local:unwatch
+
+# Watch mode for development
+pnpm run -F docs test:local
+```
+
+## Troubleshooting
+
+- **Port Conflicts**: Each instance uses different ports - check `instances/{name}/.env`
+- **Database Issues**: Use `pnpm supabase db reset --local` to clean state
+- **Service Status**: Use `make {instance}-logs` to debug service issues
+
+## Integration with Claude Code
+
+When Claude Code is working with docs tests:
+- Always check which instance/context you're working in
+- Use the appropriate directory (template vs instance)
+- Ensure Supabase services are running for the target environment
+- Reset database state for reproducible tests

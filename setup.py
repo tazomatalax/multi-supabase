@@ -45,11 +45,20 @@ def check_dependencies():
 check_dependencies()
 import jwt
 
+# Global verbosity flag
+VERBOSE = False
+
 # Configure logging
-logging.basicConfig(
-    level=logging.WARNING,  # Reduced verbosity
-    format='%(levelname)s: %(message)s'
-)
+def setup_logging(verbose: bool = False):
+    global VERBOSE
+    VERBOSE = verbose
+    level = logging.INFO if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format='%(levelname)s: %(message)s'
+    )
+
+setup_logging()
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 INSTANCES_ROOT_DIR = BASE_DIR / "instances"
@@ -58,16 +67,21 @@ REGISTRY_FILE = INSTANCES_ROOT_DIR / "instances.json"
 
 # --- Helper Functions ---
 
-def run_command(cmd: List[str], cwd: str, check: bool = True, capture: bool = False) -> Optional[str]:
-    """Execute a shell command with logging."""
+def run_command(cmd: List[str], cwd: str, check: bool = True, capture: bool = False, show_progress: bool = False) -> Optional[str]:
+    """Execute a shell command with logging and optional progress display."""
     logger.debug(f"Running command: {' '.join(cmd)} in {cwd}")
     try:
-        result = subprocess.run(
-            cmd, cwd=cwd, check=check, capture_output=True, text=True
-        )
-        if capture:
-            return result.stdout.strip()
-        return None
+        if show_progress and not capture:
+            # Show real-time output for long operations
+            result = subprocess.run(cmd, cwd=cwd, check=check, text=True)
+            return None
+        else:
+            result = subprocess.run(
+                cmd, cwd=cwd, check=check, capture_output=True, text=True
+            )
+            if capture:
+                return result.stdout.strip()
+            return None
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed with exit code {e.returncode}")
         logger.error(f"Stderr: {e.stderr.strip()}")
@@ -374,20 +388,59 @@ def create_instance(name: str) -> None:
     except Exception as e:
         logger.error(f"Failed to update registry for instance '{name}': {e}")
 
-    logger.info(f"Pulling Docker images for project '{project_name}'...")
+    print(f"📥 Pulling Docker images for '{name}'...")
+    if VERBOSE:
+        print("    This may take several minutes for the first time")
     try:
-        # Pull images first
-        run_command(["docker", "compose", "--project-name", project_name, "pull"], cwd=str(instance_path))
+        # Pull images first with progress display
+        run_command(["docker", "compose", "--project-name", project_name, "pull"], 
+                   cwd=str(instance_path), show_progress=VERBOSE)
         
         # Start the instance
-        logger.info(f"Starting Supabase instance '{name}'...")
-        run_command(["docker", "compose", "--project-name", project_name, "up", "-d"], cwd=str(instance_path))
+        print(f"🚀 Starting Supabase services for '{name}'...")
+        run_command(["docker", "compose", "--project-name", project_name, "up", "-d"], 
+                   cwd=str(instance_path), show_progress=VERBOSE)
         
-        # Wait a moment for containers to start
+        # Wait for containers to start with progress feedback
+        print("⏳ Waiting for services to become healthy...")
         import time
-        time.sleep(2)
+        time.sleep(3)  # Give containers a moment to start
+        
+        # Check container health with timeout
+        max_wait = 60  # seconds
+        wait_time = 0
+        while wait_time < max_wait:
+            result = run_command(
+                ["docker", "compose", "--project-name", project_name, "ps", "--format", "json"],
+                cwd=str(instance_path), capture=True, check=False
+            )
+            if result:
+                services = [json.loads(line) for line in result.strip().split('\n') if line]
+                healthy_services = [s for s in services if 'healthy' in s.get('Status', '')]
+                running_services = [s for s in services if s.get('State') == 'running']
+                
+                if VERBOSE:
+                    print(f"    Services running: {len(running_services)}/{len(services)}, healthy: {len(healthy_services)}")
+                
+                if len(running_services) >= len(services) * 0.8:  # 80% of services running
+                    break
+            
+            time.sleep(5)
+            wait_time += 5
+            if wait_time % 15 == 0:  # Progress update every 15 seconds
+                print(f"    Still waiting... ({wait_time}s elapsed)")
+        
+        if wait_time >= max_wait:
+            print(f"⚠️  Services are taking longer than expected to start ({max_wait}s)")
+            print("    This is often normal for first-time setup. Continuing...")
         
         # Verify containers are running
+        result = run_command(
+            ["docker", "compose", "--project-name", project_name, "ps", "--format", "json"],
+            cwd=str(instance_path), capture=True, check=False
+        )
+        
+        # Final status check
         result = run_command(
             ["docker", "compose", "--project-name", project_name, "ps", "--format", "json"],
             cwd=str(instance_path), capture=True, check=False
@@ -396,19 +449,35 @@ def create_instance(name: str) -> None:
         if result:
             services = [json.loads(line) for line in result.strip().split('\n') if line]
             running_services = [s for s in services if s.get('State') == 'running']
+            healthy_services = [s for s in services if 'healthy' in s.get('Status', '')]
             total_services = len(services)
             
-            if len(running_services) == total_services and total_services > 0:
-                logger.info("✅ Instance created and started successfully!")
-            else:
-                logger.warning(f"⚠️  Instance started but only {len(running_services)}/{total_services} services are running")
-        else:
-            logger.info("✅ Instance created and started!")
+            print(f"✅ Services started: {len(running_services)}/{total_services} running, {len(healthy_services)} healthy")
             
+            if VERBOSE and len(running_services) < total_services:
+                print("⚠️  Some services may still be starting up. This is normal.")
+                failing_services = [s for s in services if s.get('State') not in ['running', 'restarting']]
+                if failing_services:
+                    print(f"    Services not running: {[s.get('Service') for s in failing_services]}")
+        else:
+            print("✅ Instance created and started!")
+            
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to create instance '{name}': Command failed")
+        if VERBOSE:
+            print(f"    Error: {e}")
+            print(f"    Command: {' '.join(e.cmd) if hasattr(e, 'cmd') else 'Unknown'}")
+        print(f"🔧 Configuration preserved at: {instance_path}")
+        print(f"📋 Debug with: cd {instance_path} && docker compose --project-name {project_name} logs")
+        return
     except Exception as e:
-        logger.error(f"Instance '{name}' failed to start: {e}")
-        logger.error(f"Instance '{name}' configuration preserved for debugging.")
-        logger.info(f"To debug: cd {instance_path} && docker compose --project-name {project_name} logs")
+        print(f"❌ Unexpected error creating instance '{name}': {e}")
+        if VERBOSE:
+            import traceback
+            print("    Full traceback:")
+            traceback.print_exc()
+        print(f"🔧 Configuration preserved at: {instance_path}")
+        return
 
     # Display connection information
     print(f"\n✅ Instance '{name}' ready!")
@@ -495,6 +564,7 @@ def main():
 
     create_parser = subparsers.add_parser("create", help="Create and start a new Supabase instance.")
     create_parser.add_argument("name", help="A unique name for the new instance (e.g., 'my-project').")
+    create_parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed progress and debug information.")
 
     destroy_parser = subparsers.add_parser("destroy", help="Stop and delete a Supabase instance and its data.")
     destroy_parser.add_argument("name", help="The name of the instance to destroy.")
@@ -512,6 +582,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "create":
+        if hasattr(args, 'verbose') and args.verbose:
+            setup_logging(verbose=True)
         create_instance(args.name)
     elif args.command == "setup":
         setup_command()
