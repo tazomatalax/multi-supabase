@@ -29,16 +29,18 @@ help:
 setup:
 	@echo "🔧 Setting up Supabase Instance Manager..."
 	@$(MAKE) deps
-	@python3 setup.py setup
+	@.venv/bin/python setup.py setup
 	@echo "✅ Setup complete! You can now create instances."
 
 # Install dependencies only
 deps:
-	@echo "📦 Installing dependencies..."
-	pip install -r requirements.txt
+	@echo "📦 Setting up virtual environment and installing dependencies..."
+	@python3 -m venv .venv
+	@echo "🔧 Created .venv virtual environment"
+	@.venv/bin/pip install -r requirements.txt
 	@which docker > /dev/null || (echo "❌ Docker not found. Please install Docker." && exit 1)
 	@which git > /dev/null || (echo "❌ Git not found. Please install Git." && exit 1)
-	@echo "✅ Dependencies ready"
+	@echo "✅ Dependencies ready in .venv"
 
 # Core instance management
 create:
@@ -46,52 +48,52 @@ ifndef NAME
 	@echo "❌ Usage: make create NAME=myproject"
 	@exit 1
 endif
-	python3 setup.py create $(NAME)
+	.venv/bin/python setup.py create $(NAME)
 
 list:
-	python3 setup.py list
+	.venv/bin/python setup.py list
 
 destroy:
 ifndef NAME
 	@echo "❌ Usage: make destroy NAME=myproject"
 	@exit 1
 endif
-	python3 setup.py destroy $(NAME)
+	.venv/bin/python setup.py destroy $(NAME)
 
 # Dynamic instance commands - these work for any instance name
 %-start:
-	python3 setup.py start $*
+	.venv/bin/python setup.py start $*
 
 %-stop:
-	python3 setup.py stop $*
+	.venv/bin/python setup.py stop $*
 
 %-restart:
-	python3 setup.py restart $*
+	.venv/bin/python setup.py restart $*
 
 %-logs:
-	python3 setup.py logs $* -f
+	.venv/bin/python setup.py logs $* -f
 
 %-ps:
-	python3 setup.py ps $*
+	.venv/bin/python setup.py ps $*
 
 # Shortcuts for common instance names
 dev-start: 
-	python3 setup.py start dev
+	.venv/bin/python setup.py start dev
 
 dev-stop:
-	python3 setup.py stop dev
+	.venv/bin/python setup.py stop dev
 
 dev-logs:
-	python3 setup.py logs dev -f
+	.venv/bin/python setup.py logs dev -f
 
 # Clean up everything
 clean:
 	@echo "⚠️  This will destroy ALL instances. Continue? [y/N]"
 	@read -r confirm && [ "$$confirm" = "y" ] || exit 1
-	@for instance in $$(python3 setup.py list | tail -n +3 | awk '{print $$1}'); do \
+	@for instance in $$(.venv/bin/python setup.py list | tail -n +3 | awk '{print $$1}'); do \
 		if [ "$$instance" != "No" ] && [ "$$instance" != "" ]; then \
 			echo "Destroying $$instance..."; \
-			python3 setup.py destroy $$instance; \
+			.venv/bin/python setup.py destroy $$instance; \
 		fi \
 	done
 	@echo "✅ All instances destroyed"
