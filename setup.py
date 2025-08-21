@@ -134,7 +134,7 @@ def generate_secrets() -> Dict[str, str]:
         payload = {
             "role": role,
             "iss": "supabase", 
-            "aud": "authenticated" if role != "anon" else "anon",
+            "aud": "authenticated" if role == "service_role" else "anon",
             "iat": now,
             "exp": exp
         }
@@ -837,6 +837,11 @@ def main():
         cmd_parser.add_argument("name", help="The name of the instance to target.")
         cmd_parser.add_argument('services', nargs='*', help='(Optional) The service(s) to target.')
 
+    # Add 'recreate' as a special command for 'up -d --force-recreate'
+    recreate_parser = subparsers.add_parser("recreate", help="Recreate all containers for an instance (docker compose up -d --force-recreate)")
+    recreate_parser.add_argument("name", help="The name of the instance to target.")
+    recreate_parser.add_argument('services', nargs='*', help='(Optional) The service(s) to target.')
+
     args = parser.parse_args()
 
     if args.command == "create":
@@ -869,6 +874,18 @@ def main():
         project_name = f"supabase-{args.name}"
         try:
             cmd = ["docker", "compose", "--project-name", project_name, args.command] + args.services
+            subprocess.run(cmd, cwd=str(instance_path))
+        except Exception as e:
+            logger.error(f"An error occurred: {e}")
+    elif args.command == "recreate":
+        registry = load_registry()
+        if args.name not in registry:
+            logger.error(f"Instance '{args.name}' not found.")
+            return
+        instance_path = Path(registry[args.name]["path"])
+        project_name = f"supabase-{args.name}"
+        try:
+            cmd = ["docker", "compose", "--project-name", project_name, "up", "-d", "--force-recreate"] + args.services
             subprocess.run(cmd, cwd=str(instance_path))
         except Exception as e:
             logger.error(f"An error occurred: {e}")

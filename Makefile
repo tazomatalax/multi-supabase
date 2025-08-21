@@ -101,6 +101,9 @@ endif
 %-ps:
 	.venv/bin/python setup.py ps $*
 
+%-recreate:
+	.venv/bin/python setup.py recreate $*
+
 # Shortcuts for common instance names
 dev-start: 
 	.venv/bin/python setup.py start dev
